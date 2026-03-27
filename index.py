@@ -65,6 +65,24 @@ h1,h2,h3,h4 {{ font-family: 'Montserrat', sans-serif; color: {TXT_H}; }}
     color: {C_CYAN} !important;
 }}
 
+/* Tags fit within the multiselect box — truncate with ellipsis when needed */
+[data-baseweb="tag"] {{
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+}}
+[data-baseweb="tag"] > span:first-child {{
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+    max-width: calc(100% - 28px) !important;
+    display: inline-block !important;
+}}
+/* Make the multiselect value container wrap tags to new lines */
+[data-baseweb="select"] > div:first-child {{
+    flex-wrap: wrap !important;
+    min-height: 42px !important;
+}}
+
 [data-testid="stTabs"] [role="tab"] {{
     background: transparent; color: {TXT_S}; border-bottom: 2px solid transparent;
     font-family: 'Inter', sans-serif; font-weight: 500;
@@ -176,7 +194,7 @@ LAYOUT_BASE = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor=BG_PLOT,
     font=dict(family="Inter, sans-serif", color=TXT_M, size=11),
-    title_font=dict(family="Montserrat, sans-serif", color=TXT_H, size=13),
+    title=dict(text="", font=dict(family="Montserrat, sans-serif", color=TXT_H, size=13)),
     xaxis=dict(
         showgrid=False, zeroline=False,
         tickcolor=TXT_S, linecolor=BORDER,
@@ -806,16 +824,97 @@ weekly_dep = (
     .reset_index().sort_values("semana_sort")
 )
 
+col_mode, _ = st.columns([3, 7])
+with col_mode:
+    modo_sec1 = st.radio(
+        "Visualização",
+        ["Por Depósito", "Consolidado"],
+        horizontal=True,
+        key="modo_sec1",
+    )
+
 tab_kg, tab_cx, tab_un = st.tabs(["⚖️ Kilos por Semana", "📦 Caixas por Semana", "🔢 Unidades por Semana"])
 
 
-def chart_semanal_dep(metric, y_label, fmt):
+def _hex_to_rgba(hex_color, alpha=0.80):
+    """Converte hex (#RRGGBB) para rgba(r,g,b,a) aceito pelo Plotly."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def _darken_hex(hex_color, factor=0.50):
+    """Escurece uma cor hex pelo fator dado (0=preto, 1=original)."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    r2, g2, b2 = int(r * factor), int(g * factor), int(b * factor)
+    return f"#{r2:02x}{g2:02x}{b2:02x}"
+
+
+def chart_semanal_dep(metric, y_label, fmt, title_label):
     all_weeks  = sorted(df_sec1["semana_sort"].unique())
     all_labels = [lbl_map[w] for w in all_weeks]
     fig = go.Figure()
-    for dep in sorted(weekly_dep["deposito"].unique()):
-        sub = weekly_dep[weekly_dep["deposito"] == dep].sort_values("semana_sort")
-        cd = sub.apply(lambda r: [
+
+    if modo_sec1 == "Por Depósito":
+        for dep in sorted(weekly_dep["deposito"].unique()):
+            sub = weekly_dep[weekly_dep["deposito"] == dep].sort_values("semana_sort")
+            cd = sub.apply(lambda r: [
+                r["date_range"],
+                r["n_clientes"],
+                fmt_peso(r["kilos"]),
+                f"{r['caixas']:,.1f} cx",
+                f"{r['unidades']:,.0f} un"
+            ], axis=1).tolist()
+            hover = (
+                f"<b>%{{x}}</b>  <span style='color:{TXT_S}'>%{{customdata[0]}}</span><br>"
+                f"<b>{dep}</b><br>"
+                f"<span style='color:{C_CYAN}'>⚖️ Kilos</span>  <b>%{{customdata[2]}}</b><br>"
+                f"<span style='color:{C_TEAL}'>📦 Caixas</span>  <b>%{{customdata[3]}}</b><br>"
+                f"<span style='color:{C_AMBER}'>🔢 Unidades</span>  <b>%{{customdata[4]}}</b><br>"
+                f"<span style='color:{C_ORANGE}'>👥 Clientes</span>  %{{customdata[1]:.0f}}"
+                "<extra></extra>"
+            )
+            bar_color = dep_colors.get(dep, C_CYAN)
+            dark_color = _darken_hex(bar_color, factor=0.45)
+            fig.add_trace(go.Bar(
+                x=sub["semana_label"], y=sub[metric],
+                name=dep,
+                marker=dict(color=bar_color, opacity=0.85,
+                            line=dict(color=BG_PLOT, width=0.5)),
+                customdata=cd, hovertemplate=hover,
+            ))
+            # labels vertical above each bar
+            for x_val, y_val, txt in zip(sub["semana_label"].tolist(),
+                                          sub[metric].tolist(),
+                                          [fmt(v) for v in sub[metric]]):
+                if y_val == 0 or (isinstance(y_val, float) and np.isnan(y_val)):
+                    continue
+                fig.add_annotation(
+                    x=x_val, y=y_val,
+                    text=f"<b>{txt}</b>",
+                    showarrow=False,
+                    yanchor="bottom",
+                    xanchor="center",
+                    textangle=-90,
+                    font=dict(size=9, color=TXT_H, family="Montserrat, sans-serif"),
+                    bgcolor=_hex_to_rgba(dark_color, alpha=0.75),
+                    borderpad=2,
+                )
+        barmode = "group"
+    else:
+        # Consolidado: soma todos os depósitos por semana
+        weekly_cons = (
+            df_sec1.groupby(["semana_sort", "semana_label", "date_range"])
+            .agg(
+                kilos     =("kilos",        "sum"),
+                caixas    =("caixas",       "sum"),
+                unidades  =("unidades",     "sum"),
+                n_clientes=("nome_cliente", "nunique"),
+            )
+            .reset_index().sort_values("semana_sort")
+        )
+        cd = weekly_cons.apply(lambda r: [
             r["date_range"],
             r["n_clientes"],
             fmt_peso(r["kilos"]),
@@ -824,26 +923,45 @@ def chart_semanal_dep(metric, y_label, fmt):
         ], axis=1).tolist()
         hover = (
             f"<b>%{{x}}</b>  <span style='color:{TXT_S}'>%{{customdata[0]}}</span><br>"
-            f"<b>{dep}</b><br>"
+            f"<b>Total</b><br>"
             f"<span style='color:{C_CYAN}'>⚖️ Kilos</span>  <b>%{{customdata[2]}}</b><br>"
-            f"<span style='color:{C_TEAL}'>📦 Caixas</span>  <b>%{{customdata[3]:,.1f}} cx</b><br>"
-            f"<span style='color:{C_AMBER}'>🔢 Unidades</span>  <b>%{{customdata[4]:,.0f}} un</b><br>"
+            f"<span style='color:{C_TEAL}'>📦 Caixas</span>  <b>%{{customdata[3]}}</b><br>"
+            f"<span style='color:{C_AMBER}'>🔢 Unidades</span>  <b>%{{customdata[4]}}</b><br>"
             f"<span style='color:{C_ORANGE}'>👥 Clientes</span>  %{{customdata[1]:.0f}}"
             "<extra></extra>"
         )
+        dark_cons = _darken_hex(C_CYAN, factor=0.45)
         fig.add_trace(go.Bar(
-            x=sub["semana_label"], y=sub[metric],
-            name=dep,
-            marker=dict(color=dep_colors.get(dep, C_CYAN), opacity=0.85,
+            x=weekly_cons["semana_label"], y=weekly_cons[metric],
+            name="Total",
+            marker=dict(color=C_CYAN, opacity=0.85,
                         line=dict(color=BG_PLOT, width=0.5)),
-            text=sub[metric].apply(fmt),
-            textposition="outside", textfont=dict(size=12, color=TXT_H),
             customdata=cd, hovertemplate=hover,
         ))
+        for x_val, y_val, txt in zip(weekly_cons["semana_label"].tolist(),
+                                      weekly_cons[metric].tolist(),
+                                      [fmt(v) for v in weekly_cons[metric]]):
+            if y_val == 0 or (isinstance(y_val, float) and np.isnan(y_val)):
+                continue
+            fig.add_annotation(
+                x=x_val, y=y_val,
+                text=f"<b>{txt}</b>",
+                showarrow=False,
+                yanchor="bottom",
+                xanchor="center",
+                textangle=-90,
+                font=dict(size=9, color=TXT_H, family="Montserrat, sans-serif"),
+                bgcolor=_hex_to_rgba(dark_cons, alpha=0.75),
+                borderpad=2,
+            )
+        barmode = "group"
+
     fig_layout(fig,
-        height=420, barmode="group",
+        height=440, barmode=barmode,
+        title=dict(text=title_label, font=dict(size=13, color=TXT_H,
+                   family="Montserrat, sans-serif")),
         legend=dict(orientation="h", y=1.08, x=0),
-        margin=dict(t=35, b=10, l=5, r=10),
+        margin=dict(t=50, b=10, l=5, r=10),
         xaxis=dict(
             type="category", categoryorder="array", categoryarray=all_labels,
             showgrid=False, tickfont=dict(color=TXT_S, size=9),
@@ -856,17 +974,20 @@ def chart_semanal_dep(metric, y_label, fmt):
 
 with tab_kg:
     ev_s1 = st.plotly_chart(
-        chart_semanal_dep("kilos",    "Kilos (kg)",    fmt_peso),
+        chart_semanal_dep("kilos",    "Kilos (kg)",    fmt_peso,
+                          "⚖️ Kilos por Semana"),
         use_container_width=True, key="chart_s1_kg",
     )
 with tab_cx:
     st.plotly_chart(
-        chart_semanal_dep("caixas",   "Caixas (cx)",   lambda v: f"{v:,.1f} cx"),
+        chart_semanal_dep("caixas",   "Caixas (cx)",   lambda v: f"{v:,.1f} cx",
+                          "📦 Caixas por Semana"),
         use_container_width=True, key="chart_s1_cx",
     )
 with tab_un:
     st.plotly_chart(
-        chart_semanal_dep("unidades", "Unidades (un)", lambda v: f"{v:,.0f} un"),
+        chart_semanal_dep("unidades", "Unidades (un)", lambda v: f"{v:,.0f} un",
+                          "🔢 Unidades por Semana"),
         use_container_width=True, key="chart_s1_un",
     )
 
@@ -1765,7 +1886,12 @@ def _pie_customdata(grp_df, total_col="kilos"):
     grp_df["cx_fmt"]   = grp_df["caixas"].apply(lambda v: f"{v:,.1f} cx")
     grp_df["un_fmt"]   = grp_df["unidades"].apply(lambda v: f"{v:,.0f} un")
     grp_df["kg_fmt"]   = grp_df["kilos"].apply(fmt_peso)
-    return grp_df, grp_df[["kg_fmt","cx_fmt","un_fmt","pct_fmt"]].values.tolist()
+    grp_df["pct_val"]  = grp_df[total_col].apply(
+        lambda v: round(v / tot * 100, 1) if tot > 0 else 0.0
+    )
+    # Use numeric values — Plotly.js indexes numeric customdata reliably with %{customdata[i]}
+    cd = grp_df[["kilos", "caixas", "unidades", "pct_val"]].values
+    return grp_df, cd
 
 col_s, col_t = st.columns(2)
 
@@ -1784,41 +1910,48 @@ with col_s:
     )}
     sit_colors = [_sit_colors.get(lb, C_CYAN) for lb in sit_df["situacao_NF"]]
 
+    # Formata labels da legenda com kg e %
+    sit_legend_labels = [
+        f"{row.situacao_NF}  ·  {row.kg_fmt}  ·  {row.pct_fmt}"
+        for _, row in sit_df.iterrows()
+    ]
+    total_sit_kg = sit_df["kilos"].sum()
     fig_sit = go.Figure(go.Pie(
-        labels=sit_df["situacao_NF"],
+        labels=sit_legend_labels,
         values=sit_df["kilos"],
-        hole=0.55,
-        texttemplate="<b>%{label}</b><br>%{customdata[0]}<br>%{customdata[3]}",
-        textfont=dict(size=12, color=TXT_H),
-        textposition="outside",
+        hole=0.62,
+        textposition="none",
         marker=dict(colors=sit_colors, line=dict(color=BG_APP, width=4)),
         pull=[0.06 if x in st.session_state.xf_situacao else 0 for x in sit_df["situacao_NF"]],
         customdata=cd_s,
         hovertemplate=(
             "<b>%{label}</b><br>"
-            f"<span style='color:{C_CYAN}'>⚖️ Kilos</span>  <b>%{{customdata[0]}}</b><br>"
-            f"<span style='color:{C_TEAL}'>📦 Caixas</span>  %{{customdata[1]}}<br>"
-            f"<span style='color:{C_AMBER}'>🔢 Unidades</span>  %{{customdata[2]}}<br>"
-            f"<span style='color:{C_VIOLET}'>📊 Participação</span>  <b>%{{customdata[3]}}</b>"
+            f"<span style='color:{C_CYAN}'>⚖️ Kilos</span>  <b>%{{customdata[0]:,.1f}} kg</b><br>"
+            f"<span style='color:{C_TEAL}'>📦 Caixas</span>  %{{customdata[1]:,.1f}} cx<br>"
+            f"<span style='color:{C_AMBER}'>🔢 Unidades</span>  %{{customdata[2]:,.0f}} un<br>"
+            f"<span style='color:{C_VIOLET}'>📊 Participação</span>  <b>%{{customdata[3]:.1f}}%</b>"
             "<extra></extra>"
         ),
         sort=False,
+        direction="clockwise",
     ))
-    # Annotation centro do donut
-    total_sit_kg = sit_df["kilos"].sum()
     fig_sit.add_annotation(
-        text=f"<b>{total_sit_kg:,.0f}</b><br><span style='font-size:10px'>kg total</span>",
+        text=f"<b>{total_sit_kg:,.0f}</b><br><span style='font-size:10px;color:{TXT_S}'>kg total</span>",
         x=0.5, y=0.5, showarrow=False,
-        font=dict(size=16, color=TXT_H, family="Montserrat, sans-serif"),
+        font=dict(size=20, color=TXT_H, family="Montserrat, sans-serif"),
         align="center",
     )
     fig_layout(fig_sit,
         title=dict(text="Situação NF (por kilos)  ·  clique para filtrar",
                    font=dict(size=13, color=TXT_H)),
-        height=380, margin=dict(t=45, b=20, l=20, r=20),
+        height=460, margin=dict(t=50, b=120, l=20, r=20),
         showlegend=True,
-        legend=dict(orientation="v", x=1.02, y=0.5,
-                    font=dict(color=TXT_M, size=11)),
+        legend=dict(
+            orientation="h", x=0.5, xanchor="center", y=-0.22,
+            font=dict(color=TXT_M, size=11),
+            bgcolor="rgba(0,0,0,0)",
+            itemsizing="constant",
+        ),
     )
     ev_sit = st.plotly_chart(fig_sit, use_container_width=True, on_select="rerun", key="chart_sit")
     if _handle_event(ev_sit, "xf_situacao", "label"):
@@ -1846,40 +1979,47 @@ with col_t:
     tra_colors = [_tra_palette[i % len(_tra_palette)] for i in range(len(tra_df))]
     _tra_color_map = dict(zip(tra_df["transacao_str"], tra_colors))
 
+    tra_legend_labels = [
+        f"CFOP {row.transacao_str}  ·  {row.kg_fmt}  ·  {row.pct_fmt}"
+        for _, row in tra_df.iterrows()
+    ]
+    total_tra_kg = tra_df["kilos"].sum()
     fig_tra = go.Figure(go.Pie(
-        labels=tra_df["transacao_str"],
+        labels=tra_legend_labels,
         values=tra_df["kilos"],
-        hole=0.55,
-        texttemplate="<b>CFOP %{label}</b><br>%{customdata[0]}<br>%{customdata[3]}",
-        textfont=dict(size=11, color=TXT_H),
-        textposition="outside",
+        hole=0.62,
+        textposition="none",
         marker=dict(colors=tra_colors, line=dict(color=BG_APP, width=4)),
         pull=[0.06 if x in st.session_state.xf_transacao else 0 for x in tra_df["transacao_str"]],
         customdata=cd_t,
         hovertemplate=(
-            "<b>CFOP %{label}</b><br>"
-            f"<span style='color:{C_CYAN}'>⚖️ Kilos</span>  <b>%{{customdata[0]}}</b><br>"
-            f"<span style='color:{C_TEAL}'>📦 Caixas</span>  %{{customdata[1]}}<br>"
-            f"<span style='color:{C_AMBER}'>🔢 Unidades</span>  %{{customdata[2]}}<br>"
-            f"<span style='color:{C_VIOLET}'>📊 Participação</span>  <b>%{{customdata[3]}}</b>"
+            "<b>%{label}</b><br>"
+            f"<span style='color:{C_CYAN}'>⚖️ Kilos</span>  <b>%{{customdata[0]:,.1f}} kg</b><br>"
+            f"<span style='color:{C_TEAL}'>📦 Caixas</span>  %{{customdata[1]:,.1f}} cx<br>"
+            f"<span style='color:{C_AMBER}'>🔢 Unidades</span>  %{{customdata[2]:,.0f}} un<br>"
+            f"<span style='color:{C_VIOLET}'>📊 Participação</span>  <b>%{{customdata[3]:.1f}}%</b>"
             "<extra></extra>"
         ),
         sort=False,
+        direction="clockwise",
     ))
-    total_tra_kg = tra_df["kilos"].sum()
     fig_tra.add_annotation(
-        text=f"<b>{total_tra_kg:,.0f}</b><br><span style='font-size:10px'>kg total</span>",
+        text=f"<b>{total_tra_kg:,.0f}</b><br><span style='font-size:10px;color:{TXT_S}'>kg total</span>",
         x=0.5, y=0.5, showarrow=False,
-        font=dict(size=16, color=TXT_H, family="Montserrat, sans-serif"),
+        font=dict(size=20, color=TXT_H, family="Montserrat, sans-serif"),
         align="center",
     )
     fig_layout(fig_tra,
         title=dict(text="Transação CFOP (por kilos)  ·  clique para filtrar",
                    font=dict(size=13, color=TXT_H)),
-        height=380, margin=dict(t=45, b=20, l=20, r=20),
+        height=460, margin=dict(t=50, b=120, l=20, r=20),
         showlegend=True,
-        legend=dict(orientation="v", x=1.02, y=0.5,
-                    font=dict(color=TXT_M, size=11)),
+        legend=dict(
+            orientation="h", x=0.5, xanchor="center", y=-0.22,
+            font=dict(color=TXT_M, size=11),
+            bgcolor="rgba(0,0,0,0)",
+            itemsizing="constant",
+        ),
     )
     ev_tra = st.plotly_chart(fig_tra, use_container_width=True, on_select="rerun", key="chart_tra")
     if _handle_event(ev_tra, "xf_transacao", "label"):
