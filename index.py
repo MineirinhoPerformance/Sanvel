@@ -1806,14 +1806,80 @@ def evolution_lines_cliente(metric_col, fmt_fn, y_title):
         f"<span style='color:{C_CYAN}'>⚖️ Kilos</span>  <b>%{{customdata[1]:,.1f}} kg</b><br>"
         f"<span style='color:{C_TEAL}'>📦 Caixas</span>  <b>%{{customdata[2]:,.1f}} cx</b><br>"
         f"<span style='color:{C_AMBER}'>🔢 Unidades</span>  <b>%{{customdata[3]:,.0f}} un</b><br>"
-        f"<span style='color:{C_ORANGE}'>🏷️ Produtos distintos</span>  %{{customdata[4]:.0f}}"
+        f"<span style='color:{C_ORANGE}'>🏷️ Produtos distintos</span>  %{{customdata[4]:.0f}}<br>"
+        f"<span style='color:{TXT_S};font-size:9px'>clique para filtrar por cliente</span>"
         "<extra></extra>"
     )
-    fig = go.Figure()
+
+    all_wk = [lbl_map[w] for w in ALL_RANGE_SORTS if w in lbl_map]
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PASSO 1 — calcula médias e monta dados de cada cliente
+    # ══════════════════════════════════════════════════════════════════════════
+    client_stats = []   # lista de dicts, um por cliente com avg_val
     for cli in clientes:
         sub   = cli_wk[cli_wk["nome_cliente"] == cli]
         color = cli_colors[cli]
-        cd    = sub[["date_range", "kilos", "caixas", "unidades", "n_produtos"]].fillna(0).values.tolist()
+
+        primeiro_fat = (
+            sub[sub["val"] > 0]["semana_sort"].min()
+            if (sub["val"] > 0).any() else None
+        )
+        if primeiro_fat is None:
+            client_stats.append(None)
+            continue
+
+        sub_desde = sub[sub["semana_sort"] >= primeiro_fat]
+        avg_val   = sub_desde["val"].mean()
+        n_total   = len(sub_desde)
+        n_zeros   = int((sub_desde["val"] == 0).sum())
+        n_fat     = n_total - n_zeros
+        val_max   = sub_desde["val"].max()
+        val_min   = sub_desde[sub_desde["val"] > 0]["val"].min() if n_fat > 0 else 0.0
+        sem_inicio = sub_desde["semana_label"].iloc[0]
+        sem_fim    = sub_desde["semana_label"].iloc[-1]
+
+        client_stats.append(dict(
+            cli=cli, color=color, sub=sub, sub_desde=sub_desde,
+            avg_val=avg_val, n_total=n_total, n_zeros=n_zeros, n_fat=n_fat,
+            val_max=val_max, val_min=val_min,
+            sem_inicio=sem_inicio, sem_fim=sem_fim,
+        ))
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PASSO 2 — rankeia por avg_val DECRESCENTE (maior → menor)
+    # ══════════════════════════════════════════════════════════════════════════
+    valid_with_idx   = [(i, s["avg_val"]) for i, s in enumerate(client_stats) if s is not None]
+    valid_sorted_desc = sorted(valid_with_idx, key=lambda t: t[1], reverse=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PASSO 3 — constrói o gráfico (traces inseridos do maior para o menor)
+    # ══════════════════════════════════════════════════════════════════════════
+    fig = go.Figure()
+
+    for rank, (i, _) in enumerate(valid_sorted_desc, 1):
+        s = client_stats[i]
+        if s is None:
+            continue
+
+        cli        = s["cli"]
+        color      = s["color"]
+        sub        = s["sub"]
+        avg_val    = s["avg_val"]
+        n_total    = s["n_total"]
+        n_zeros    = s["n_zeros"]
+        n_fat      = s["n_fat"]
+        val_max    = s["val_max"]
+        val_min    = s["val_min"]
+        sem_inicio = s["sem_inicio"]
+        sem_fim    = s["sem_fim"]
+
+        # ── customdata linha principal: [date_range, kg, cx, un, n_prod, cli] ─
+        cd = sub[["date_range","kilos","caixas","unidades","n_produtos"]].fillna(0).copy()
+        cd["_cli"] = cli
+        cd_vals = cd.values.tolist()
+
+        # ── Linha principal (sem entrada na legenda — a avg line representa o card) ──
         fig.add_trace(go.Scatter(
             x=sub["semana_label"], y=sub["val"],
             mode="lines+markers+text", name=str(cli),
@@ -1821,28 +1887,137 @@ def evolution_lines_cliente(metric_col, fmt_fn, y_title):
             marker=dict(size=7, color=color, line=dict(color=BG_PLOT, width=1.5)),
             text=sub["val"].apply(fmt_fn),
             textposition="top center", textfont=dict(size=8, color=color),
-            customdata=cd, hovertemplate=hover_ev_cli,
+            customdata=cd_vals, hovertemplate=hover_ev_cli,
+            legendgroup=cli,
+            showlegend=False,
+            legendrank=rank,
         ))
-    all_wk = [lbl_map[w] for w in ALL_RANGE_SORTS if w in lbl_map]
+
+        # hover detalhado da linha de média
+        hover_avg = (
+            f"<b>📊 Média — {cli}</b><br>"
+            f"──────────────────────────────<br>"
+            f"<b style='font-size:13px'>{fmt_fn(avg_val)}</b>  <i style='font-size:9px'>média/semana</i><br>"
+            f"──────────────────────────────<br>"
+            f"<span style='color:{TXT_S}'>🗓️ Período:</span>  {sem_inicio} → {sem_fim}<br>"
+            f"<span style='color:{TXT_S}'>📐 Semanas usadas:</span>  <b>{n_total}</b> "
+            f"<i>({n_fat} com fat. + {n_zeros} zeradas)</i><br>"
+            f"<span style='color:{C_GREEN}'>⬆ Máximo:</span>  <b>{fmt_fn(val_max)}</b><br>"
+            f"<span style='color:{C_RED}'>⬇ Mínimo (fat.):</span>  <b>{fmt_fn(val_min)}</b><br>"
+            f"──────────────────────────────<br>"
+            f"<span style='color:{TXT_S};font-size:9px'>"
+            f"Lógica: soma dos valores desde a 1ª semana com<br>"
+            f"faturamento ÷ total de semanas do período<br>"
+            f"(zeros após o início reduzem a média)</span><br>"
+            f"<span style='color:{C_CYAN};font-size:9px'>clique para filtrar por este cliente</span>"
+            "<extra></extra>"
+        )
+
+        # customdata da linha de média: [cli, "__avg__"] — identificador para o handler de filtro
+        avg_cd = [[cli, "__avg__"]] * len(all_wk)
+
+        # ── Linha de média — CARD na legenda lateral direita ──────────────────
+        # Nome exibido no card: "#rank  NomeCliente  ·  valor_médio"
+        card_name = f"#{rank}  {cli}  ·  {fmt_fn(avg_val)}"
+
+        fig.add_trace(go.Scatter(
+            x=all_wk,
+            y=[avg_val] * len(all_wk),
+            mode="lines",
+            name=card_name,
+            line=dict(color=color, width=1.8, dash="dash"),
+            opacity=0.65,
+            showlegend=True,       # ← aparece como card na legenda lateral
+            legendgroup=cli,
+            customdata=avg_cd,
+            hovertemplate=hover_avg,
+            legendrank=rank,       # garante ordem decrescente na legenda
+        ))
+
+    # ── margem direita dinâmica conforme o maior label de card ────────────────
+    if valid_sorted_desc:
+        max_lbl = max(
+            len(f"#{r}  {client_stats[idx]['cli']}  ·  {fmt_fn(client_stats[idx]['avg_val'])}")
+            for r, (idx, _) in enumerate(valid_sorted_desc, 1)
+            if client_stats[idx] is not None
+        )
+    else:
+        max_lbl = 20
+    r_margin = min(max(190, max_lbl * 7 + 40), 360)
+
     fig_layout(fig,
         height=max(460, 30 * len(clientes) + 300),
         hovermode="x unified",
-        legend=dict(orientation="h", y=-0.22, font=dict(color=TXT_M, size=10)),
-        margin=dict(t=20, b=100, l=5, r=10),
+        legend=dict(
+            orientation="v",
+            x=1.01,
+            y=1.0,
+            xanchor="left",
+            yanchor="top",
+            bgcolor="rgba(15,25,41,0.93)",   # BG_CARD com alpha
+            bordercolor=BORDER,
+            borderwidth=1,
+            font=dict(color=TXT_M, size=10, family="Montserrat, sans-serif"),
+            title=dict(
+                text="  Média/semana  ▼",
+                font=dict(color=C_CYAN, size=10, family="Montserrat, sans-serif"),
+            ),
+            itemclick="toggleothers",      # clique isola a linha do cliente
+            itemdoubleclick="toggle",      # duplo-clique alterna visibilidade
+            tracegroupgap=2,
+        ),
+        margin=dict(t=20, b=20, l=5, r=r_margin),
         xaxis=dict(type="category", categoryorder="array", categoryarray=all_wk,
                    showgrid=False, tickfont=dict(color=TXT_S, size=9)),
         yaxis=dict(showgrid=True, gridcolor=GRID, title_text=y_title,
                    title_font=dict(color=TXT_S), tickfont=dict(color=TXT_S)),
     )
-    return fig
+    return fig, set(clientes)
+
+
+# ── Handler de clique nos gráficos de cliente ─────────────────────────────────
+def _handle_cli_ev(event, clientes_set):
+    """Extrai o nome do cliente ao clicar na linha principal ou na linha de média."""
+    if not (event and hasattr(event, "selection") and event.selection):
+        return False
+    pts = event.selection.get("points", [])
+    if not pts:
+        return _update_xf("xf_cliente", set())
+    vals = set()
+    for p in pts:
+        cd = p.get("customdata")
+        if not cd:
+            continue
+        # linha de média: customdata = [cli, "__avg__"]
+        if isinstance(cd, (list, tuple)) and len(cd) >= 2 and cd[1] == "__avg__":
+            vals.add(str(cd[0]))
+        # linha principal: customdata = [date_range, kg, cx, un, n_prod, cli]
+        elif isinstance(cd, (list, tuple)) and len(cd) >= 6:
+            candidate = str(cd[5])
+            if candidate in clientes_set:
+                vals.add(candidate)
+    if not vals:
+        return _update_xf("xf_cliente", set())
+    if vals == st.session_state["xf_cliente"]:
+        return _update_xf("xf_cliente", set())
+    return _update_xf("xf_cliente", vals)
 
 
 with tab_cli_ev1:
-    st.plotly_chart(evolution_lines_cliente("kilos",    lambda v: fmt_br(v, 1) + "kg", "Kilos (kg)"),    use_container_width=True)
+    _fig1, _cli_set1 = evolution_lines_cliente("kilos",    lambda v: fmt_br(v, 1) + "kg", "Kilos (kg)")
+    _ev1 = st.plotly_chart(_fig1, use_container_width=True, on_select="rerun", key="chart_cli_ev1")
+    if _handle_cli_ev(_ev1, _cli_set1):
+        st.rerun()
 with tab_cli_ev2:
-    st.plotly_chart(evolution_lines_cliente("caixas",   lambda v: fmt_br(v, 1) + "cx", "Caixas (cx)"),   use_container_width=True)
+    _fig2, _cli_set2 = evolution_lines_cliente("caixas",   lambda v: fmt_br(v, 1) + "cx", "Caixas (cx)")
+    _ev2 = st.plotly_chart(_fig2, use_container_width=True, on_select="rerun", key="chart_cli_ev2")
+    if _handle_cli_ev(_ev2, _cli_set2):
+        st.rerun()
 with tab_cli_ev3:
-    st.plotly_chart(evolution_lines_cliente("unidades", lambda v: fmt_br(v, 0) + "un", "Unidades (un)"), use_container_width=True)
+    _fig3, _cli_set3 = evolution_lines_cliente("unidades", lambda v: fmt_br(v, 0) + "un", "Unidades (un)")
+    _ev3 = st.plotly_chart(_fig3, use_container_width=True, on_select="rerun", key="chart_cli_ev3")
+    if _handle_cli_ev(_ev3, _cli_set3):
+        st.rerun()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
