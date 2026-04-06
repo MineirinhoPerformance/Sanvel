@@ -42,6 +42,30 @@ GRID   = "#1E3A5F"
 
 PROD_COLORS = [C_CYAN, C_TEAL, C_AMBER, C_VIOLET, C_ORANGE, C_GREEN, "#EC4899"]
 
+# ── CORES POR SKU ─────────────────────────────────────────────────────────────
+SKU_COLORS = {
+    "40105": "#9E9E9E",   # Cinza
+    "30105": "#8B5E3C",   # Marrom
+    "30615": "#4169E1",   # Azul Royal
+    "30625": "#E8446E",   # Goiaba
+    "30645": "#8B0000",   # Vermelho Fechado
+}
+SKU_COLOR_OUTROS = "#555555"  # Preto/Cinza escuro (visível no dark theme)
+
+
+def sku_color(prod_key):
+    """Retorna cor baseada no codigo SKU do produto."""
+    s = str(prod_key).strip()
+    for sku, color in SKU_COLORS.items():
+        if s.startswith(sku):
+            return color
+        parts = s.split(chr(8211))  # –
+        if not parts:
+            parts = s.split("-")
+        if parts and parts[0].strip() == sku:
+            return color
+    return SKU_COLOR_OUTROS
+
 # ── CSS ────────────────────────────────────────────────────────────────────────
 st.markdown(f"""
 <style>
@@ -65,17 +89,19 @@ h1,h2,h3,h4 {{ font-family: 'Montserrat', sans-serif; color: {TXT_H}; }}
     color: {C_CYAN} !important;
 }}
 
-/* Tags fit within the multiselect box — truncate with ellipsis when needed */
+/* Tags: grow to fit their text; only show ellipsis when the container is too narrow */
 [data-baseweb="tag"] {{
     max-width: 100% !important;
     box-sizing: border-box !important;
+    flex-shrink: 1 !important;
+    min-width: 0 !important;
 }}
 [data-baseweb="tag"] > span:first-child {{
     overflow: hidden !important;
     white-space: nowrap !important;
     text-overflow: ellipsis !important;
-    max-width: calc(100% - 28px) !important;
-    display: inline-block !important;
+    display: block !important;
+    min-width: 0 !important;
 }}
 /* Make the multiselect value container wrap tags to new lines */
 [data-baseweb="select"] > div:first-child {{
@@ -301,14 +327,13 @@ def fmt_br(v, dec=2):
     return s.replace(",", "X").replace(".", ",").replace("X", ".")
 
 def fmt_peso(v):
-    """Formata peso: <1kg vira gramas"""
+    """Formata peso no padrão BR: <1kg vira gramas"""
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return "—"
-    
     if v < 1:
-        return f"{v * 1000:,.0f} g"
+        return fmt_br(v * 1000, 0) + " g"
     else:
-        return f"{v:,.1f} kg"
+        return fmt_br(v, 1) + " kg"
 
 
 # ── SESSION STATE ─────────────────────────────────────────────────────────────
@@ -351,8 +376,9 @@ def load_data(base_file_bytes: bytes):
 
     df_char = db_load()
 
-    df["emissao"]      = pd.to_datetime(df["emissao"])
-    df["ano"]          = df["emissao"].dt.year
+    df["emissao"]      = pd.to_datetime(df["emissao"], dayfirst=True)
+    df["ano"]          = df["emissao"].dt.isocalendar().year.astype(int)
+    df["Numero_Semana"] = df["emissao"].dt.isocalendar().week.astype(int)
     df["semana_sort"]  = df["ano"] * 100 + df["Numero_Semana"]
     df["semana_label"] = (
         "S" + df["Numero_Semana"].astype(str).str.zfill(2)
@@ -420,7 +446,7 @@ def sec(icon, title):
 
 
 def prod_color_map(prods):
-    return {p: PROD_COLORS[i % len(PROD_COLORS)] for i, p in enumerate(sorted(prods))}
+    return {p: sku_color(p) for p in prods}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -675,6 +701,69 @@ prod_sel  = st.sidebar.multiselect("Produtos", prod_opts, default=prod_opts, key
 dep_opts = sorted(df_raw["deposito"].dropna().unique())
 dep_sel  = st.sidebar.multiselect("Depósito", dep_opts, default=dep_opts, key="fs_dep")
 
+# ── FILTRO DE DATAS ───────────────────────────────────────────────────────────
+date_min_v = df_raw["emissao"].dt.date.min()
+date_max_v = df_raw["emissao"].dt.date.max()
+
+# ── Botões de mês clicáveis ──────────────────────────────────────────────────
+import calendar
+_meses_pt = {
+    1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",
+    7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"
+}
+_meses_cheio = {
+    1:"Janeiro",2:"Fevereiro",3:"Março",4:"Abril",5:"Maio",6:"Junho",
+    7:"Julho",8:"Agosto",9:"Setembro",10:"Outubro",11:"Novembro",12:"Dezembro"
+}
+
+# Obtém os meses disponíveis nos dados
+_meses_disp = (
+    df_raw[["emissao"]]
+    .assign(ano=df_raw["emissao"].dt.year, mes=df_raw["emissao"].dt.month)
+    [["ano","mes"]].drop_duplicates().sort_values(["ano","mes"])
+)
+
+st.sidebar.markdown(
+    f"<div style='font-size:.75rem;font-weight:600;color:{TXT_S};letter-spacing:.05em;"
+    f"margin-bottom:6px'>📅 FILTRAR POR MÊS</div>",
+    unsafe_allow_html=True,
+)
+
+# Renderiza botões de mês em grade de 4 colunas
+_mes_cols = st.sidebar.columns(4)
+for _i, (_, _row) in enumerate(_meses_disp.iterrows()):
+    _ano, _mes = int(_row["ano"]), int(_row["mes"])
+    _btn_label = f"{_meses_pt[_mes]}/{str(_ano)[-2:]}"
+    with _mes_cols[_i % 4]:
+        if st.button(_btn_label, key=f"btn_mes_{_ano}_{_mes}", use_container_width=True):
+            import datetime as _dt
+            _last_day = calendar.monthrange(_ano, _mes)[1]
+            st.session_state["fs_date_from"] = _dt.date(_ano, _mes, 1)
+            st.session_state["fs_date_to"]   = _dt.date(_ano, _mes, _last_day)
+            st.session_state["fs_month"]      = f"{_meses_cheio[_mes]}/{_ano}"
+
+st.sidebar.markdown(f"<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+
+date_from = st.sidebar.date_input(
+    "Data inicial",
+    value=date_min_v,
+    min_value=date_min_v,
+    max_value=date_max_v,
+    key="fs_date_from",
+    format="DD/MM/YYYY",
+)
+date_to = st.sidebar.date_input(
+    "Data final",
+    value=date_max_v,
+    min_value=date_min_v,
+    max_value=date_max_v,
+    key="fs_date_to",
+    format="DD/MM/YYYY",
+)
+# garante ordem correta
+if date_from > date_to:
+    date_from, date_to = date_to, date_from
+
 st.sidebar.markdown(f"<hr style='border-color:{BORDER};margin:10px 0'>", unsafe_allow_html=True)
 
 # ── FILTRAGEM ─────────────────────────────────────────────────────────────────
@@ -682,6 +771,7 @@ df_base = df_raw[
     df_raw["situacao_NF"].isin(sit_sel)
     & df_raw["transacao_str"].isin(tra_sel)
     & df_raw["semana_sort"].between(sel_range[0], sel_range[1])
+    & df_raw["emissao"].dt.date.between(date_from, date_to)
     & df_raw["nome_cliente"].isin(cli_sel)
     & df_raw["prod_nome"].isin(prod_sel)
     & df_raw["deposito"].isin(dep_sel)
@@ -704,6 +794,61 @@ def apply_xf(df):
 
 df = apply_xf(df_base)
 
+# ── SEMANAS CANÔNICAS DO INTERVALO SELECIONADO ────────────────────────────────
+# Todas as semanas do df_raw que estão dentro do intervalo (sel_range) e do
+# filtro de datas — independentemente de qualquer outro filtro.  Usadas para
+# reindexar e garantir semanas zeradas em todos os gráficos.
+_raw_in_range = df_raw[
+    df_raw["semana_sort"].between(sel_range[0], sel_range[1])
+    & df_raw["emissao"].dt.date.between(date_from, date_to)
+]
+ALL_RANGE_SORTS: list = sorted(_raw_in_range["semana_sort"].unique())
+_wk_canon = (
+    _raw_in_range[["semana_sort", "semana_label", "date_range"]]
+    .drop_duplicates()
+    .sort_values("semana_sort")
+)
+
+
+def _reindex_to_all_weeks(df_agg: "pd.DataFrame", extra_keys: list = None) -> "pd.DataFrame":
+    """Garante que df_agg contém uma linha por cada semana em ALL_RANGE_SORTS.
+
+    df_agg deve ter 'semana_sort' como coluna.  Se extra_keys for passado
+    (e.g. ['deposito']), o produto cartesiano semana × extra_keys é usado.
+    Colunas numéricas ausentes ficam 0; strings ficam ''.
+    """
+    meta_cols = ["semana_sort", "semana_label", "date_range"]
+
+    if extra_keys:
+        # produto cartesiano: todas as semanas × todos os valores de cada chave
+        key_vals = [df_agg[k].dropna().unique().tolist() for k in extra_keys]
+        import itertools
+        combos = list(itertools.product(ALL_RANGE_SORTS, *key_vals))
+        idx_cols = ["semana_sort"] + extra_keys
+        full_idx = pd.DataFrame(combos, columns=idx_cols)
+        merged = full_idx.merge(df_agg, on=idx_cols, how="left")
+    else:
+        full_idx = pd.DataFrame({"semana_sort": ALL_RANGE_SORTS})
+        merged = full_idx.merge(df_agg, on="semana_sort", how="left")
+
+    # preenche numéricos com 0, strings com ''
+    for col in merged.columns:
+        if col in meta_cols + (extra_keys or []):
+            continue
+        if pd.api.types.is_numeric_dtype(merged[col]):
+            merged[col] = merged[col].fillna(0)
+        else:
+            merged[col] = merged[col].fillna("")
+
+    # reatacha semana_label e date_range canônicos
+    merged = merged.merge(_wk_canon, on="semana_sort", how="left", suffixes=("", "_can"))
+    for c in ["semana_label", "date_range"]:
+        if f"{c}_can" in merged.columns:
+            merged[c] = merged[f"{c}_can"].fillna(merged.get(c, ""))
+            merged.drop(columns=[f"{c}_can"], inplace=True)
+
+    return merged.sort_values("semana_sort").reset_index(drop=True)
+
 any_xf = any([
     st.session_state.xf_produto, st.session_state.xf_cliente,
     st.session_state.xf_situacao, st.session_state.xf_transacao,
@@ -714,6 +859,7 @@ any_xf = any([
     len(prod_sel) < len(prod_opts),
     len(dep_sel) < len(dep_opts),
     sel_range != (semanas_disp[0], semanas_disp[-1]),
+    date_from != date_min_v or date_to != date_max_v,
 ])
 
 # ── HEADER ────────────────────────────────────────────────────────────────────
@@ -726,21 +872,27 @@ with h_col:
         unsafe_allow_html=True,
     )
     st.caption(
-        f"**{len(df):,}** registros · "
+        f"**{fmt_br(len(df), 0)}** registros · "
         f"**{df['semana_sort'].nunique()}** semanas · "
         f"**{df['nome_cliente'].nunique()}** clientes · "
         f"**{df['codigo_produto'].nunique()}** produtos"
     )
 with btn_col:
+    # ==============================================
+    # CORREÇÃO: Remover as chaves dos widgets de filtro
+    # em vez de tentar reatribuir valores diretamente.
+    # ==============================================
     if st.button("🗑️ Limpar\nFiltros", use_container_width=True, disabled=not any_xf):
+        # Limpa os filtros de seleção por clique (xf_*)
         for k in ["xf_produto","xf_cliente","xf_situacao","xf_transacao","xf_semana"]:
             st.session_state[k] = set()
-        st.session_state["fs_sit"]   = sit_opts
-        st.session_state["fs_tra"]   = tra_opts
-        st.session_state["fs_cli"]   = cli_opts
-        st.session_state["fs_prod"]  = prod_opts
-        st.session_state["fs_dep"]   = dep_opts
-        st.session_state["fs_range"] = (semanas_disp[0], semanas_disp[-1])
+        
+        # Remove as chaves dos widgets de filtro para que voltem ao default
+        for k in ["fs_sit", "fs_tra", "fs_cli", "fs_prod", "fs_dep", "fs_range",
+                  "fs_date_from", "fs_date_to", "fs_month"]:
+            if k in st.session_state:
+                del st.session_state[k]
+        
         st.rerun()
 
 if any_xf:
@@ -773,14 +925,35 @@ avg_kg_sem = total_kg / n_semanas if n_semanas else 0
 n_pedidos  = df[df["tem_pedido"]]["pedido_clean"].nunique()
 
 kpis = [
-    (C_CYAN,   "⚖️",  "TOTAL KILOS",       f"{fmt_br(total_kg, 1)} kg",       f"{fmt_br(avg_kg_sem, 1)} kg/sem média"),
-    (C_TEAL,   "📦",  "TOTAL CAIXAS",       f"{fmt_br(total_cx, 1)} cx",       f"{fmt_br(total_cx/n_semanas, 1)} cx/sem" if n_semanas else ""),
-    (C_AMBER,  "🔢",  "TOTAL UNIDADES",     f"{fmt_br(total_un, 0)} un",       f"{fmt_br(total_un/n_semanas, 0)} un/sem" if n_semanas else ""),
-    (C_VIOLET, "🛒",  "PEDIDOS",            f"{n_pedidos:,}",                  f"{df['nome_cliente'].nunique()} clientes"),
+    (C_CYAN,   "⚖️",  "TOTAL KILOS",       f"{fmt_br(total_kg, 1)} kg",       ""),
+    (C_TEAL,   "📦",  "TOTAL CAIXAS",       f"{fmt_br(total_cx, 1)} cx",       ""),
+    (C_AMBER,  "🔢",  "TOTAL UNIDADES",     f"{fmt_br(total_un, 0)} un",       ""),
+    (C_VIOLET, "🛒",  "PEDIDOS",            fmt_br(n_pedidos, 0),              f"{df['nome_cliente'].nunique()} clientes"),
     (C_ORANGE, "🏭",  "DEPÓSITOS ATIVOS",   f"{df['deposito'].nunique()}",     f"{df['codigo_produto'].nunique()} produtos"),
 ]
 cols_kpi = st.columns(5)
 for col, (accent, icon, label, val, sub) in zip(cols_kpi, kpis):
+    col.markdown(
+        f"""<div class="kpi-card" style="--accent:{accent}">
+          <div class="kpi-icon">{icon}</div>
+          <div class="kpi-label">{label}</div>
+          <div class="kpi-value">{val}</div>
+          <div class="kpi-sub">{sub}</div></div>""",
+        unsafe_allow_html=True,
+    )
+
+# ── CARDS DE MÉDIA ─────────────────────────────────────────────────────────────
+st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+avg_cols = st.columns(3)
+avg_kpis = [
+    (C_CYAN,   "📈", "MÉDIA KG/SEM",  f"{fmt_br(avg_kg_sem, 1)} kg",
+     f"{n_semanas} semanas no período"),
+    (C_TEAL,   "📈", "MÉDIA CX/SEM",  f"{fmt_br(total_cx / n_semanas, 1)} cx" if n_semanas else "—",
+     "caixas por semana"),
+    (C_AMBER,  "📈", "MÉDIA UN/SEM",  f"{fmt_br(total_un / n_semanas, 0)} un" if n_semanas else "—",
+     "unidades por semana"),
+]
+for col, (accent, icon, label, val, sub) in zip(avg_cols, avg_kpis):
     col.markdown(
         f"""<div class="kpi-card" style="--accent:{accent}">
           <div class="kpi-icon">{icon}</div>
@@ -803,15 +976,7 @@ dep_colors = {d: c for d, c in zip(dep_list, [C_CYAN, C_TEAL, C_AMBER, C_VIOLET,
 # ═══════════════════════════════════════════════════════════════════════════════
 sec("📅", "Análise Semanal por Depósito")
 
-col_d1, col_d2 = st.columns([3, 7])
-with col_d1:
-    deps_disp = sorted(df_base["deposito"].dropna().unique())
-    dep_sec1  = st.multiselect(
-        "Filtrar por Depósito (nesta seção)",
-        deps_disp, default=deps_disp, key="dep_sec1",
-    )
-
-df_sec1 = df_base[df_base["deposito"].isin(dep_sec1)] if dep_sec1 else df_base.copy()
+df_sec1 = df_base.copy()
 
 weekly_dep = (
     df_sec1.groupby(["semana_sort","semana_label","date_range","deposito"])
@@ -823,6 +988,11 @@ weekly_dep = (
     )
     .reset_index().sort_values("semana_sort")
 )
+
+# garante todos os depósitos em todas as semanas do intervalo (zeros para semanas vazias)
+_all_deps = sorted(df_raw["deposito"].dropna().unique())
+weekly_dep = _reindex_to_all_weeks(weekly_dep, extra_keys=["deposito"])
+weekly_dep = weekly_dep[weekly_dep["deposito"].isin(_all_deps)]
 
 col_mode, _ = st.columns([3, 7])
 with col_mode:
@@ -852,9 +1022,11 @@ def _darken_hex(hex_color, factor=0.50):
 
 
 def chart_semanal_dep(metric, y_label, fmt, title_label):
-    all_weeks  = sorted(df_sec1["semana_sort"].unique())
-    all_labels = [lbl_map[w] for w in all_weeks]
+    all_labels = [lbl_map[w] for w in ALL_RANGE_SORTS if w in lbl_map]
     fig = go.Figure()
+
+    # ── coleta valores de média para linha ────────────────────────────────────
+    mean_vals = []
 
     if modo_sec1 == "Por Depósito":
         for dep in sorted(weekly_dep["deposito"].unique()):
@@ -863,8 +1035,8 @@ def chart_semanal_dep(metric, y_label, fmt, title_label):
                 r["date_range"],
                 r["n_clientes"],
                 fmt_peso(r["kilos"]),
-                f"{r['caixas']:,.1f} cx",
-                f"{r['unidades']:,.0f} un"
+                fmt_br(r["caixas"], 1) + " cx",
+                fmt_br(r["unidades"], 0) + " un"
             ], axis=1).tolist()
             hover = (
                 f"<b>%{{x}}</b>  <span style='color:{TXT_S}'>%{{customdata[0]}}</span><br>"
@@ -901,25 +1073,27 @@ def chart_semanal_dep(metric, y_label, fmt, title_label):
                     bgcolor=_hex_to_rgba(dark_color, alpha=0.75),
                     borderpad=2,
                 )
+            mean_vals.extend(sub[sub[metric] > 0][metric].tolist())
         barmode = "group"
     else:
-        # Consolidado: soma todos os depósitos por semana
-        weekly_cons = (
-            df_sec1.groupby(["semana_sort", "semana_label", "date_range"])
+        # Consolidado: soma todos os depósitos por semana, reindexado a todas as semanas
+        weekly_cons_raw = (
+            df_sec1.groupby(["semana_sort"])
             .agg(
                 kilos     =("kilos",        "sum"),
                 caixas    =("caixas",       "sum"),
                 unidades  =("unidades",     "sum"),
                 n_clientes=("nome_cliente", "nunique"),
             )
-            .reset_index().sort_values("semana_sort")
+            .reset_index()
         )
-        cd = weekly_cons.apply(lambda r: [
+        weekly_cons_raw = _reindex_to_all_weeks(weekly_cons_raw)
+        cd = weekly_cons_raw.apply(lambda r: [
             r["date_range"],
             r["n_clientes"],
             fmt_peso(r["kilos"]),
-            f"{r['caixas']:,.1f} cx",
-            f"{r['unidades']:,.0f} un"
+            fmt_br(r["caixas"], 1) + " cx",
+            fmt_br(r["unidades"], 0) + " un"
         ], axis=1).tolist()
         hover = (
             f"<b>%{{x}}</b>  <span style='color:{TXT_S}'>%{{customdata[0]}}</span><br>"
@@ -932,15 +1106,15 @@ def chart_semanal_dep(metric, y_label, fmt, title_label):
         )
         dark_cons = _darken_hex(C_CYAN, factor=0.45)
         fig.add_trace(go.Bar(
-            x=weekly_cons["semana_label"], y=weekly_cons[metric],
+            x=weekly_cons_raw["semana_label"], y=weekly_cons_raw[metric],
             name="Total",
             marker=dict(color=C_CYAN, opacity=0.85,
                         line=dict(color=BG_PLOT, width=0.5)),
             customdata=cd, hovertemplate=hover,
         ))
-        for x_val, y_val, txt in zip(weekly_cons["semana_label"].tolist(),
-                                      weekly_cons[metric].tolist(),
-                                      [fmt(v) for v in weekly_cons[metric]]):
+        for x_val, y_val, txt in zip(weekly_cons_raw["semana_label"].tolist(),
+                                      weekly_cons_raw[metric].tolist(),
+                                      [fmt(v) for v in weekly_cons_raw[metric]]):
             if y_val == 0 or (isinstance(y_val, float) and np.isnan(y_val)):
                 continue
             fig.add_annotation(
@@ -954,19 +1128,117 @@ def chart_semanal_dep(metric, y_label, fmt, title_label):
                 bgcolor=_hex_to_rgba(dark_cons, alpha=0.75),
                 borderpad=2,
             )
+        mean_vals = weekly_cons_raw[weekly_cons_raw[metric] > 0][metric].tolist()
         barmode = "group"
+
+    # ── Linha de média ────────────────────────────────────────────────────────
+    if mean_vals:
+        mean_val = float(np.mean(mean_vals))
+        fig.add_hline(
+            y=mean_val,
+            line_dash="dot",
+            line_color=C_ORANGE,
+            line_width=2,
+            annotation_text=f"Média: {fmt(mean_val)}",
+            annotation_position="right",
+            annotation_font=dict(color=C_ORANGE, size=10),
+        )
 
     fig_layout(fig,
         height=440, barmode=barmode,
         title=dict(text=title_label, font=dict(size=13, color=TXT_H,
                    family="Montserrat, sans-serif")),
         legend=dict(orientation="h", y=1.08, x=0),
-        margin=dict(t=50, b=10, l=5, r=10),
+        margin=dict(t=50, b=10, l=5, r=80),
         xaxis=dict(
             type="category", categoryorder="array", categoryarray=all_labels,
             showgrid=False, tickfont=dict(color=TXT_S, size=9),
         ),
         yaxis=dict(showgrid=True, gridcolor=GRID, title_text=y_label,
+                   title_font=dict(color=TXT_S), tickfont=dict(color=TXT_S)),
+    )
+    return fig
+
+
+def chart_caixas_sku():
+    """Caixas por semana discriminadas por SKU (stacked, cores e hachuras alternadas)."""
+    all_labels = [lbl_map[w] for w in ALL_RANGE_SORTS if w in lbl_map]
+
+    # Agrega por semana × produto
+    sku_wk_raw = (
+        df_sec1.groupby(["semana_sort","codigo_produto","prod_nome"])
+        .agg(caixas=("caixas","sum"))
+        .reset_index()
+    )
+    _all_skus = sorted(df_raw["codigo_produto"].dropna().unique())
+    # mantém apenas SKUs presentes no filtro atual
+    _all_skus = [s for s in _all_skus if s in df_sec1["codigo_produto"].values]
+    if not _all_skus:
+        return go.Figure()
+
+    sku_wk = _reindex_to_all_weeks(sku_wk_raw, extra_keys=["codigo_produto"])
+    sku_wk = sku_wk[sku_wk["codigo_produto"].isin(_all_skus)]
+
+    # recupera prod_nome para cada SKU
+    _sku_nome = sku_wk_raw[["codigo_produto","prod_nome"]].drop_duplicates()
+    sku_wk = sku_wk.drop(columns=["prod_nome"], errors="ignore").merge(
+        _sku_nome, on="codigo_produto", how="left"
+    )
+    sku_wk["prod_nome"] = sku_wk["prod_nome"].fillna(sku_wk["codigo_produto"].astype(str))
+    sku_wk = sku_wk.sort_values(["semana_sort","codigo_produto"])
+
+    HATCH_SHAPES = ["", "/", "\\", "x", "-", "|", "+", "."]
+    fig = go.Figure()
+    for i, sku in enumerate(_all_skus):
+        sub   = sku_wk[sku_wk["codigo_produto"] == sku]
+        color = sku_color(str(sku))
+        hatch = HATCH_SHAPES[i % len(HATCH_SHAPES)]
+        nome  = sub["prod_nome"].iloc[0] if not sub["prod_nome"].isna().all() else str(sku)
+        fig.add_trace(go.Bar(
+            x=sub["semana_label"],
+            y=sub["caixas"],
+            name=str(nome),
+            marker=dict(
+                color=color,
+                opacity=0.85,
+                line=dict(color=BG_PLOT, width=0.5),
+                pattern=dict(shape=hatch, fgcolor=_darken_hex(color, 0.4),
+                             size=6, solidity=0.4),
+            ),
+            hovertemplate=(
+                f"<b>%{{x}}</b><br>"
+                f"<b>{nome}</b><br>"
+                f"<span style='color:{C_TEAL}'>📦 Caixas</span>  <b>%{{y:,.2f}} cx</b>"
+                "<extra></extra>"
+            ),
+        ))
+
+    # Linha de média (total consolidado por semana)
+    total_by_wk = sku_wk.groupby("semana_sort")["caixas"].sum()
+    nz_vals     = total_by_wk[total_by_wk > 0]
+    if not nz_vals.empty:
+        mean_cx = float(nz_vals.mean())
+        fig.add_hline(
+            y=mean_cx,
+            line_dash="dot",
+            line_color=C_ORANGE,
+            line_width=2,
+            annotation_text=f"Média: {fmt_br(mean_cx, 2)} cx",
+            annotation_position="right",
+            annotation_font=dict(color=C_ORANGE, size=10),
+        )
+
+    fig_layout(fig,
+        height=440, barmode="stack",
+        title=dict(text="📦 Caixas por Semana por SKU",
+                   font=dict(size=13, color=TXT_H, family="Montserrat, sans-serif")),
+        legend=dict(orientation="h", y=1.08, x=0),
+        margin=dict(t=50, b=10, l=5, r=80),
+        xaxis=dict(
+            type="category", categoryorder="array", categoryarray=all_labels,
+            showgrid=False, tickfont=dict(color=TXT_S, size=9),
+        ),
+        yaxis=dict(showgrid=True, gridcolor=GRID, title_text="Caixas (cx)",
                    title_font=dict(color=TXT_S), tickfont=dict(color=TXT_S)),
     )
     return fig
@@ -980,13 +1252,12 @@ with tab_kg:
     )
 with tab_cx:
     st.plotly_chart(
-        chart_semanal_dep("caixas",   "Caixas (cx)",   lambda v: f"{v:,.1f} cx",
-                          "📦 Caixas por Semana"),
+        chart_caixas_sku(),
         use_container_width=True, key="chart_s1_cx",
     )
 with tab_un:
     st.plotly_chart(
-        chart_semanal_dep("unidades", "Unidades (un)", lambda v: f"{v:,.0f} un",
+        chart_semanal_dep("unidades", "Unidades (un)", lambda v: fmt_br(v, 0) + " un",
                           "🔢 Unidades por Semana"),
         use_container_width=True, key="chart_s1_un",
     )
@@ -1008,11 +1279,23 @@ weekly = (
     )
     .reset_index().sort_values("semana_sort")
 )
+
+# garante todas as semanas do intervalo selecionado (incluindo vazias = zero)
+weekly = _reindex_to_all_weeks(weekly)
+
 weekly["delta_kg"]  = weekly["kilos"].diff().fillna(0)
 weekly["delta_pct"] = (weekly["kilos"].pct_change().fillna(0) * 100).round(2)
+# Para o traço de linha: substitui ±inf por NaN (semanas zeradas geram inf no pct_change)
+# connectgaps=True vai ligar os pontos válidos, ignorando os NaN
+weekly["delta_pct_line"] = weekly["delta_pct"].replace([np.inf, -np.inf], np.nan)
 weekly["bar_color"] = weekly["delta_kg"].apply(lambda v: C_CYAN if v >= 0 else C_RED)
 
-cd_sem = weekly[["date_range","caixas","unidades","delta_kg","delta_pct","n_clientes","n_produtos"]].fillna(0).values.tolist()
+cd_sem = (
+    weekly[["date_range","caixas","unidades","delta_kg","delta_pct","n_clientes","n_produtos"]]
+    .replace([np.inf, -np.inf], np.nan)
+    .fillna(0)
+    .values.tolist()
+)
 hover_sem = (
     "<b style='font-size:13px'>%{x}</b><br>"
     f"<span style='color:{TXT_S}'>📅 %{{customdata[0]}}</span><br>"
@@ -1026,40 +1309,218 @@ hover_sem = (
     "<extra></extra>"
 )
 
-fig_sem = make_subplots(specs=[[{"secondary_y": True}]])
+# ── Dois subplots empilhados: linha Δ% em cima, barras de kg embaixo ──────────
+# shared_xaxes=True garante sincronismo de zoom/pan e nunca se tocam
+_cat_arr = [lbl_map[w] for w in ALL_RANGE_SORTS if w in lbl_map]
+
+fig_sem = make_subplots(
+    rows=2, cols=1,
+    shared_xaxes=True,
+    row_heights=[0.28, 0.72],   # 28 % linha · 72 % barras
+    vertical_spacing=0.06,      # gap fixo entre os dois painéis
+)
 fig_sem.data = []  # 🔥 limpa qualquer trace fantasma
+
+# ── Row 2 (baixo): barras de kilos ───────────────────────────────────────────
 fig_sem.add_trace(go.Bar(
     x=weekly["semana_label"], y=weekly["kilos"],
     name="Kilos",
     marker=dict(color=weekly["bar_color"], opacity=0.85, line=dict(color=BG_PLOT, width=0.5)),
-    text=weekly["kilos"].apply(fmt_peso),
-    textposition="outside", textfont=dict(size=9, color=TXT_M),
     customdata=cd_sem, hovertemplate=hover_sem,
-), secondary_y=False)
+), row=2, col=1)
+
+# Labels com background nas barras de kg
+for _, row in weekly.iterrows():
+    if row["kilos"] == 0:
+        continue
+    bar_c = row["bar_color"]
+    dark_c = _darken_hex(bar_c, factor=0.40)
+    fig_sem.add_annotation(
+        x=row["semana_label"], y=row["kilos"],
+        xref="x2", yref="y2",
+        text=f"<b>{fmt_peso(row['kilos'])}</b>",
+        showarrow=False,
+        yanchor="bottom", xanchor="center",
+        textangle=-90,
+        font=dict(size=9, color=TXT_H, family="Montserrat, sans-serif"),
+        bgcolor=_hex_to_rgba(dark_c, alpha=0.82),
+        borderpad=2,
+    )
+
+# ── Tendência linear (OLS) no painel de barras ───────────────────────────────
+# Usa TODAS as semanas do intervalo (incluindo as zeradas) para que a inclinação
+# da reta reflita fielmente o ângulo visual das barras no eixo Y.
+# x posicional (0, 1, 2…) → espaçamento uniforme, igual ao eixo de categorias.
+_all_x  = np.arange(len(weekly), dtype=float)
+_all_y  = weekly["kilos"].values.astype(float)
+
+if len(_all_x) >= 2:
+    _slope, _intercept = np.polyfit(_all_x, _all_y, 1)
+    _trend_y = _slope * _all_x + _intercept
+
+    # R² sobre todos os pontos (incluindo zeros)
+    _y_pred  = _slope * _all_x + _intercept
+    _ss_res  = np.sum((_all_y - _y_pred) ** 2)
+    _ss_tot  = np.sum((_all_y - _all_y.mean()) ** 2)
+    _r2      = 1.0 - _ss_res / _ss_tot if _ss_tot > 0 else 0.0
+
+    # ── Interpretação amigável ────────────────────────────────────────────────
+    # Slope como % da média das semanas com faturamento (contexto relativo)
+    _mean_active = float(_all_y[_all_y > 0].mean()) if (_all_y > 0).any() else 1.0
+    _slope_pct   = (_slope / _mean_active * 100) if _mean_active > 0 else 0.0
+
+    # Força da tendência baseada no R²
+    if _r2 < 0.10:
+        _r2_label = "sem padrão definido"
+        _r2_tip   = "Os dados estão muito dispersos — a reta não representa bem o comportamento real."
+    elif _r2 < 0.30:
+        _r2_label = "padrão fraco"
+        _r2_tip   = "Existe uma leve tendência, mas com muita variação em torno da reta."
+    elif _r2 < 0.60:
+        _r2_label = "padrão moderado"
+        _r2_tip   = "A tendência é razoavelmente consistente, com variações pontuais."
+    else:
+        _r2_label = "padrão consistente"
+        _r2_tip   = "A tendência é clara e confiável — os dados seguem bem a direção da reta."
+
+    # Direção e intensidade do slope
+    if abs(_slope_pct) < 2:
+        _direction = "Estável"
+        _dir_emoji = "➡️"
+        _dir_tip   = f"Volume praticamente constante semana a semana ({fmt_br(_slope, 1)} kg/sem)."
+    elif _slope > 0:
+        if _slope_pct < 6:
+            _direction = "Leve crescimento"
+            _dir_emoji = "📈"
+        else:
+            _direction = "Em crescimento"
+            _dir_emoji = "📈"
+        _dir_tip = f"Ganho médio de {fmt_br(abs(_slope), 1)} kg por semana ({_slope_pct:+.1f}% da média ativa)."
+    else:
+        if abs(_slope_pct) < 6:
+            _direction = "Leve queda"
+            _dir_emoji = "📉"
+        else:
+            _direction = "Em queda"
+            _dir_emoji = "📉"
+        _dir_tip = f"Perda média de {fmt_br(abs(_slope), 1)} kg por semana ({_slope_pct:+.1f}% da média ativa)."
+
+    _trend_color = C_GREEN if _slope >= 0 else C_RED
+
+    # customdata: [valor_real_barra, desvio_reta_vs_real, trend_semana_anterior]
+    _prev_trend = np.concatenate([[np.nan], _trend_y[:-1]])
+    _cd_trend   = np.column_stack([
+        _all_y,                        # [0] valor real da barra
+        _all_y - _trend_y,             # [1] desvio real vs reta
+        _prev_trend,                   # [2] valor da reta na semana anterior
+    ])
+
+    fig_sem.add_trace(go.Scatter(
+        x=weekly["semana_label"], y=_trend_y,
+        mode="lines",
+        name=f"{_dir_emoji} Tendência: {_direction}",
+        line=dict(color=_trend_color, width=2, dash="dot"),
+        customdata=_cd_trend,
+        hovertemplate=(
+            "<b>%{x}  —  Linha de Tendência</b><br>"
+            f"<b>{_dir_emoji} {_direction}</b>  ·  {_r2_label}<br>"
+            "─────────────────────────────────<br>"
+            f"<span style='color:{TXT_S}'>Reta nesta semana</span>  <b>%{{y:,.1f}} kg</b><br>"
+            f"<span style='color:{TXT_S}'>Real desta semana</span>  <b>%{{customdata[0]:,.1f}} kg</b>  "
+            "<i>(desvio: %{customdata[1]:+,.1f} kg)</i><br>"
+            f"<span style='color:{TXT_S}'>Reta semana anterior</span>  <b>%{{customdata[2]:,.1f}} kg</b>  "
+            f"<i>(+{_slope:,.1f} kg/sem = projeção da reta)</i><br>"
+            "─────────────────────────────────<br>"
+            f"<span style='color:{TXT_S}' style='font-size:9px'>A reta é ajustada sobre todo o período — "
+            f"seu valor aqui não parte do real da semana anterior.</span><br>"
+            f"{_dir_tip}<br>"
+            f"<span style='color:{TXT_S}'>{_r2_tip}</span>"
+            "<extra></extra>"
+        ),
+    ), row=2, col=1)
+
+    # Rótulo final com interpretação resumida
+    _annot_line1 = f"<b>{_dir_emoji} {_direction}</b>"
+    _annot_line2 = f"{fmt_br(_slope, 1)} kg/sem  ·  {_r2_label}"
+    fig_sem.add_annotation(
+        x=weekly["semana_label"].iloc[-1],
+        y=float(_trend_y[-1]),
+        xref="x2", yref="y2",
+        text=f"{_annot_line1}<br><span style='font-size:8px'>{_annot_line2}</span>",
+        showarrow=True,
+        arrowhead=2, arrowcolor=_trend_color, arrowwidth=1.5,
+        ax=0, ay=-38,
+        font=dict(size=9, color=_trend_color, family="Montserrat, sans-serif"),
+        bgcolor=_hex_to_rgba(_darken_hex(BG_SIDEBAR, 0.5), alpha=0.92),
+        bordercolor=_trend_color,
+        borderwidth=1,
+        borderpad=4,
+    )
+
+# ── Row 1 (cima): linha Δ% ───────────────────────────────────────────────────
 fig_sem.add_trace(go.Scatter(
-    x=weekly["semana_label"], y=weekly["delta_pct"],
-    mode="lines+markers+text", name="Δ%",
+    x=weekly["semana_label"], y=weekly["delta_pct_line"],
+    mode="lines+markers", name="Δ%",
     line=dict(color=C_AMBER, width=2),
     marker=dict(size=6, color=C_AMBER, line=dict(color=BG_PLOT, width=1)),
-    text=weekly["delta_pct"].apply(lambda v: f"{v:+.1f}%"),
-    textposition="top center", textfont=dict(size=9, color=C_AMBER),
+    connectgaps=True,
     hovertemplate="<b>%{x}</b><br>Variação: <b>%{y:+.1f}%</b><extra></extra>",
-), secondary_y=True)
+), row=1, col=1)
+
+# Labels Δ% com background
+for _, row in weekly.iterrows():
+    if row["kilos"] == 0 or not np.isfinite(row["delta_pct"]):
+        continue
+    fig_sem.add_annotation(
+        x=row["semana_label"], y=row["delta_pct_line"],
+        xref="x", yref="y",
+        text=f"<b>{row['delta_pct']:+.1f}%</b>",
+        showarrow=False,
+        yanchor="bottom", xanchor="center",
+        font=dict(size=9, color=C_AMBER, family="Inter, sans-serif"),
+        bgcolor=_hex_to_rgba(_darken_hex(BG_SIDEBAR, 0.5), alpha=0.88),
+        borderpad=2,
+    )
+
+# ── Layout global ─────────────────────────────────────────────────────────────
 fig_layout(fig_sem,
-    height=410, hovermode="x unified",
-    legend=dict(orientation="h", y=1.1, x=0),
-    margin=dict(t=35, b=10, l=5, r=10),
-    xaxis=dict(showgrid=False, tickfont=dict(color=TXT_S, size=9)),
+    height=520, hovermode="x unified",
+    legend=dict(orientation="h", y=1.08, x=0),
+    margin=dict(t=35, b=10, l=5, r=60),
 )
-fig_sem.update_yaxes(
-    title_text="Kilos (kg)", secondary_y=False,
-    ticksuffix=" kg", gridcolor=GRID, tickfont=dict(color=TXT_S),
-    title_font=dict(color=TXT_S), zeroline=False,
-)
-fig_sem.update_yaxes(
-    title_text="Variação %", secondary_y=True,
-    ticksuffix="%", showgrid=False, tickfont=dict(color=C_AMBER),
-    title_font=dict(color=C_AMBER), zeroline=True, zerolinecolor=TXT_S,
+
+# x-axis: row 1 (topo) sem rótulos — row 2 (baixo) com rótulos das semanas
+fig_sem.update_layout(
+    xaxis=dict(
+        showgrid=False, zeroline=False,
+        tickcolor=TXT_S, linecolor=BORDER,
+        type="category", categoryorder="array",
+        categoryarray=_cat_arr,
+        showticklabels=False,   # oculta no painel superior
+    ),
+    xaxis2=dict(
+        showgrid=False, zeroline=False,
+        tickcolor=TXT_S, linecolor=BORDER,
+        tickfont=dict(color=TXT_S, size=9),
+        type="category", categoryorder="array",
+        categoryarray=_cat_arr,
+    ),
+    # y-axis row 1: Δ%
+    yaxis=dict(
+        title_text="Variação %",
+        ticksuffix="%", showgrid=True, gridcolor=GRID,
+        zeroline=True, zerolinecolor=TXT_S, zerolinewidth=1,
+        tickfont=dict(color=C_AMBER), tickcolor=TXT_S, linecolor=BORDER,
+        title_font=dict(color=C_AMBER, size=11),
+    ),
+    # y-axis row 2: Kilos
+    yaxis2=dict(
+        title_text="Kilos (kg)",
+        ticksuffix=" kg", showgrid=True, gridcolor=GRID,
+        zeroline=False,
+        tickfont=dict(color=TXT_S), tickcolor=TXT_S, linecolor=BORDER,
+        title_font=dict(color=TXT_S, size=11),
+    ),
 )
 ev_sem = st.plotly_chart(fig_sem, use_container_width=True, on_select="rerun", key="chart_sem")
 
@@ -1082,8 +1543,8 @@ metrica_rank = st.radio(
 )
 met_fmt_rank = {
     "kilos":    fmt_peso,
-    "caixas":   lambda v: f"{v:,.1f} cx",
-    "unidades": lambda v: f"{v:,.0f} un",
+    "caixas":   lambda v: fmt_br(v, 1) + " cx",
+    "unidades": lambda v: fmt_br(v, 0) + " un",
 }[metrica_rank]
 
 col_p, col_c = st.columns(2)
@@ -1134,49 +1595,88 @@ with col_p:
         st.rerun()
 
 with col_c:
-    cli_stats = (
-        df_base.groupby("nome_cliente")
-        .agg(
-            kilos    =("kilos",     "sum"),
-            caixas   =("caixas",    "sum"),
-            unidades =("unidades",  "sum"),
-            n_pedidos=("pedido_clean", lambda x: x[df_base.loc[x.index,"tem_pedido"]].nunique()),
-            semanas_ativas=("semana_sort","nunique"),
+    # Gráfico de rosca: participação dos produtos por cliente (em % do volume selecionado)
+    prod_cli_stats = (
+        df_base.groupby(["prod_nome","codigo_produto"])
+        .agg(val=(metrica_rank, "sum"))
+        .reset_index()
+        .sort_values("val", ascending=False)
+    )
+    total_geral = prod_cli_stats["val"].sum()
+    if total_geral > 0:
+        prod_cli_stats["pct"] = (prod_cli_stats["val"] / total_geral * 100).round(1)
+    else:
+        prod_cli_stats["pct"] = 0.0
+
+    # Agrupa produtos menores em "Outros" para não poluir o gráfico
+    _top_n_donut = 6
+    if len(prod_cli_stats) > _top_n_donut:
+        _top   = prod_cli_stats.head(_top_n_donut).copy()
+        _resto = prod_cli_stats.iloc[_top_n_donut:].copy()
+        _outros_row = pd.DataFrame([{
+            "prod_nome": "Outros",
+            "codigo_produto": "outros",
+            "val": _resto["val"].sum(),
+            "pct": _resto["pct"].sum(),
+        }])
+        prod_cli_stats = pd.concat([_top, _outros_row], ignore_index=True)
+
+    _donut_colors = [sku_color(r["prod_nome"]) for _, r in prod_cli_stats.iterrows()]
+
+    _donut_labels = [
+        f"{r['prod_nome']}  ·  {met_fmt_rank(r['val'])}  ·  {r['pct']:.1f}%"
+        for _, r in prod_cli_stats.iterrows()
+    ]
+
+    # Pré-monta hover completo por fatia (única string HTML — Plotly Pie não indexa customdata[i] corretamente)
+    _donut_hover_body = [
+        (
+            f"<span style='color:{C_CYAN}'>📊 Participação</span>  <b>{fmt_br(r['pct'], 1)}%</b><br>"
+            f"<span style='color:{C_TEAL}'>📦 Volume</span>  <b>{met_fmt_rank(r['val'])}</b>"
         )
-        .reset_index().sort_values(metrica_rank, ascending=True)
-    )
-    cli_stats["color"] = cli_stats["nome_cliente"].apply(
-        lambda x: C_AMBER if x in st.session_state.xf_cliente else C_TEAL
-    )
-    cd_c = cli_stats[["kilos","caixas","unidades","n_pedidos","semanas_ativas"]].fillna(0).values.tolist()
-    hover_c = (
-        "<b>%{y}</b><br>"
-        f"<span style='color:{C_CYAN}'>⚖️ Kilos</span>  <b>%{{customdata[0]:,.1f}} kg</b><br>"
-        f"<span style='color:{C_TEAL}'>📦 Caixas</span>  <b>%{{customdata[1]:,.1f}} cx</b><br>"
-        f"<span style='color:{C_AMBER}'>🔢 Unidades</span>  <b>%{{customdata[2]:,.0f}} un</b><br>"
-        f"<span style='color:{C_VIOLET}'>🛒 Pedidos</span>  %{{customdata[3]:.0f}}<br>"
-        f"<span style='color:{C_GREEN}'>📅 Semanas ativas</span>  %{{customdata[4]:.0f}}"
-        "<extra></extra>"
-    )
-    fig_cli = go.Figure(go.Bar(
-        name="Algum Nome",
-        x=cli_stats[metrica_rank], y=cli_stats["nome_cliente"],
-        orientation="h",
-        marker=dict(color=cli_stats["color"], line=dict(color=BG_PLOT, width=0.5)),
-        text=cli_stats[metrica_rank].apply(met_fmt_rank), textposition="outside",
-        textfont=dict(size=10, color=TXT_H),
-        customdata=cd_c, hovertemplate=hover_c,
+        for _, r in prod_cli_stats.iterrows()
+    ]
+
+    fig_cli = go.Figure(go.Pie(
+        labels=_donut_labels,
+        values=prod_cli_stats["val"],
+        hole=0.60,
+        textposition="none",
+        marker=dict(
+            colors=_donut_colors,
+            line=dict(color=BG_APP, width=3),
+        ),
+        customdata=_donut_hover_body,
+        hovertemplate=(
+            "<b>%{label}</b><br>"
+            "%{customdata}"
+            "<extra></extra>"
+        ),
+        sort=False,
+        direction="clockwise",
     ))
-    fig_layout(fig_cli,
-        title=dict(text="Por Cliente  ·  clique para filtrar"),
-        height=max(300, len(cli_stats) * 52),
-        margin=dict(t=40, b=10, l=5, r=120),
-        yaxis=dict(type="category", showgrid=False, tickfont=dict(color=TXT_M, size=10)),
-        xaxis=dict(showgrid=True, gridcolor=GRID),
+
+    _metric_label = {"kilos":"Kilos","caixas":"Caixas","unidades":"Unidades"}[metrica_rank]
+    _total_fmt = met_fmt_rank(total_geral)
+    fig_cli.add_annotation(
+        text=f"<b>{_total_fmt}</b><br><span style='font-size:10px;color:{TXT_S}'>{_metric_label} total</span>",
+        x=0.5, y=0.5, showarrow=False,
+        font=dict(size=16, color=TXT_H, family="Montserrat, sans-serif"),
+        align="center",
     )
-    ev_cli = st.plotly_chart(fig_cli, use_container_width=True, on_select="rerun", key="chart_cli")
-    if _handle_event(ev_cli, "xf_cliente", "y"):
-        st.rerun()
+    fig_layout(fig_cli,
+        title=dict(text="Participação por Produto  ·  % do volume total"),
+        height=max(380, 380),
+        margin=dict(t=45, b=110, l=20, r=20),
+        showlegend=True,
+        legend=dict(
+            orientation="h", x=0.5, xanchor="center", y=-0.20,
+            font=dict(color=TXT_M, size=10),
+            bgcolor="rgba(0,0,0,0)",
+            itemsizing="constant",
+        ),
+    )
+    st.plotly_chart(fig_cli, use_container_width=True, key="chart_cli")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1188,7 +1688,7 @@ tab_ev1, tab_ev2, tab_ev3 = st.tabs(["⚖️ Kilos", "📦 Caixas", "🔢 Unidad
 
 
 def evolution_lines(metric_col, fmt_fn, y_title):
-    prod_wk = (
+    prod_wk_raw = (
         df.groupby(["semana_sort","semana_label","date_range","prod_nome","codigo_produto"])
         .agg(
             val      =(metric_col, "sum"),
@@ -1199,7 +1699,22 @@ def evolution_lines(metric_col, fmt_fn, y_title):
         )
         .reset_index().sort_values("semana_sort")
     )
-    prods = sorted(prod_wk["prod_nome"].unique())
+    prods = sorted(prod_wk_raw["prod_nome"].unique())
+
+    # reindexar: todas as semanas do intervalo × todos os produtos filtrados
+    prod_wk = _reindex_to_all_weeks(prod_wk_raw, extra_keys=["prod_nome"])
+    # recupera val / métricas para os pares existentes
+    _val_map = prod_wk_raw.set_index(["semana_sort","prod_nome"])[
+        ["val","kilos","caixas","unidades","n_clientes"]
+    ]
+    prod_wk = prod_wk.set_index(["semana_sort","prod_nome"])
+    prod_wk.update(_val_map)
+    prod_wk = prod_wk.reset_index().sort_values(["semana_sort","prod_nome"])
+    # preenche NaN que possam ter sobrado
+    for _mc in ["val","kilos","caixas","unidades","n_clientes"]:
+        if _mc in prod_wk.columns:
+            prod_wk[_mc] = prod_wk[_mc].fillna(0)
+
     cmap  = prod_color_map(prods)
     hover_ev = (
         "<b>%{fullData.name}</b><br>"
@@ -1223,7 +1738,7 @@ def evolution_lines(metric_col, fmt_fn, y_title):
             textposition="top center", textfont=dict(size=8, color=cmap[prod]),
             customdata=cd, hovertemplate=hover_ev,
         ))
-    all_wk = df[["semana_sort","semana_label"]].drop_duplicates().sort_values("semana_sort")["semana_label"].tolist()
+    all_wk = [lbl_map[w] for w in ALL_RANGE_SORTS if w in lbl_map]
     fig_layout(fig,
         height=420, hovermode="x unified",
         legend=dict(orientation="h", y=-0.22, font=dict(color=TXT_M, size=10)),
@@ -1237,11 +1752,11 @@ def evolution_lines(metric_col, fmt_fn, y_title):
 
 
 with tab_ev1:
-    st.plotly_chart(evolution_lines("kilos",    lambda v: f"{v:,.1f}kg",  "Kilos (kg)"),    use_container_width=True)
+    st.plotly_chart(evolution_lines("kilos",    lambda v: fmt_br(v,1)+"kg",  "Kilos (kg)"),    use_container_width=True)
 with tab_ev2:
-    st.plotly_chart(evolution_lines("caixas",   lambda v: f"{v:,.1f}cx",  "Caixas (cx)"),   use_container_width=True)
+    st.plotly_chart(evolution_lines("caixas",   lambda v: fmt_br(v,1)+"cx",  "Caixas (cx)"),   use_container_width=True)
 with tab_ev3:
-    st.plotly_chart(evolution_lines("unidades", lambda v: f"{v:,.0f}un",  "Unidades (un)"), use_container_width=True)
+    st.plotly_chart(evolution_lines("unidades", lambda v: fmt_br(v,0)+"un",  "Unidades (un)"), use_container_width=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1303,7 +1818,7 @@ fig_ped = go.Figure(go.Bar(
     x=pedidos_cli["n_pedidos"], y=pedidos_cli["nome_cliente"],
     orientation="h",
     marker=dict(color=C_VIOLET, opacity=0.85, line=dict(color=BG_PLOT, width=0.5)),
-    text=pedidos_cli["n_pedidos"].apply(lambda v: f"{v:.0f} pedidos"),
+    text=pedidos_cli["n_pedidos"].apply(lambda v: fmt_br(v, 0) + " pedidos"),
     textposition="outside", textfont=dict(size=10, color=TXT_H),
     customdata=cd_ped, hovertemplate=hover_ped,
 ))
@@ -1326,21 +1841,21 @@ col_np1, col_np2, col_np3 = st.columns(3)
 col_np1.markdown(
     f"<div class='kpi-card' style='--accent:{C_GREEN}'>"
     f"<div class='kpi-label'>NOTAS COM PEDIDO</div>"
-    f"<div class='kpi-value' style='font-size:1.4rem'>{n_com_ped:,}</div>"
+    f"<div class='kpi-value' style='font-size:1.4rem'>{fmt_br(n_com_ped, 0)}</div>"
     f"<div class='kpi-sub'>{pct_com:.1f}% do total</div></div>",
     unsafe_allow_html=True,
 )
 col_np2.markdown(
     f"<div class='kpi-card' style='--accent:{C_AMBER}'>"
     f"<div class='kpi-label'>NOTAS SEM PEDIDO</div>"
-    f"<div class='kpi-value' style='font-size:1.4rem'>{n_sem_ped:,}</div>"
+    f"<div class='kpi-value' style='font-size:1.4rem'>{fmt_br(n_sem_ped, 0)}</div>"
     f"<div class='kpi-sub'>{100-pct_com:.1f}% do total</div></div>",
     unsafe_allow_html=True,
 )
 col_np3.markdown(
     f"<div class='kpi-card' style='--accent:{C_VIOLET}'>"
     f"<div class='kpi-label'>PEDIDOS ÚNICOS</div>"
-    f"<div class='kpi-value' style='font-size:1.4rem'>{df_base[df_base['tem_pedido']]['pedido_clean'].nunique():,}</div>"
+    f"<div class='kpi-value' style='font-size:1.4rem'>{fmt_br(df_base[df_base['tem_pedido']]['pedido_clean'].nunique(), 0)}</div>"
     f"<div class='kpi-sub'>números distintos de pedido</div></div>",
     unsafe_allow_html=True,
 )
@@ -1433,9 +1948,9 @@ with st.expander("📋 Detalhamento de Notas por Dia — Pedido x Sem Pedido"):
     )
     st.markdown(
         f"<div style='font-size:.82rem;color:{TXT_M};margin-bottom:8px'>"
-        f"<b>{total_notas}</b> notas em {datas_label} · "
-        f"<span style='color:{C_GREEN}'><b>{com_ped_dia}</b> com pedido</span> · "
-        f"<span style='color:{C_AMBER}'><b>{sem_ped_dia}</b> sem número de pedido</span></div>",
+        f"<b>{fmt_br(total_notas, 0)}</b> notas em {datas_label} · "
+        f"<span style='color:{C_GREEN}'><b>{fmt_br(com_ped_dia, 0)}</b> com pedido</span> · "
+        f"<span style='color:{C_AMBER}'><b>{fmt_br(sem_ped_dia, 0)}</b> sem número de pedido</span></div>",
         unsafe_allow_html=True,
     )
     st.dataframe(tbl_notas, height=350, hide_index=True, use_container_width=True)
@@ -1443,7 +1958,7 @@ with st.expander("📋 Detalhamento de Notas por Dia — Pedido x Sem Pedido"):
     if sem_ped_dia > 0:
         st.markdown(
             f"<div style='font-size:.78rem;color:{C_AMBER};margin-top:8px'>"
-            f"ℹ️ As <b>{sem_ped_dia}</b> nota(s) sem número de pedido podem ter sido emitidas "
+            f"ℹ️ As <b>{fmt_br(sem_ped_dia, 0)}</b> nota(s) sem número de pedido podem ter sido emitidas "
             f"avulsamente, sem vínculo com um pedido formal no sistema. "
             f"Recomenda-se verificar junto à equipe comercial se esses faturamentos "
             f"correspondem a pedidos não registrados.</div>",
@@ -1460,7 +1975,7 @@ n_notas_sem_ped_total = (~df_base["tem_pedido"]).sum()
 if n_notas_sem_ped_total > 0:
     st.markdown(
         f"<div style='font-size:.8rem;color:{C_AMBER};margin-bottom:12px'>"
-        f"ℹ️ <b>{n_notas_sem_ped_total}</b> nota(s) sem número de pedido não foram incluídas "
+        f"ℹ️ <b>{fmt_br(n_notas_sem_ped_total, 0)}</b> nota(s) sem número de pedido não foram incluídas "
         f"nesta análise. Apenas pedidos com número identificado são considerados "
         f"para o cálculo do intervalo.</div>",
         unsafe_allow_html=True,
@@ -1523,7 +2038,7 @@ if not dist_resumo.empty:
             color=[dist_color(v) for v in dist_resumo["media_dias"]],
             opacity=0.85, line=dict(color=BG_PLOT, width=0.5),
         ),
-        text=dist_resumo["media_dias"].apply(lambda v: f"{v:.1f} dias"),
+        text=dist_resumo["media_dias"].apply(lambda v: f"{fmt_br(v,1)} dias"),
         textposition="outside", textfont=dict(size=10, color=TXT_H),
         customdata=cd_dist, hovertemplate=hover_dist,
     ))
@@ -1554,6 +2069,197 @@ if not dist_resumo.empty:
         st.dataframe(tbl_ped, height=320, hide_index=True)
 else:
     st.info("Não há clientes com mais de 1 pedido no período selecionado para calcular distância.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEÇÃO 6B — ANÁLISE DE RITMO: MÉDIA DE DIAS A CADA 4 NOTAS / PEDIDOS
+# ═══════════════════════════════════════════════════════════════════════════════
+sec("🔄", "Ritmo de Compra — Média de Dias a Cada 4 Notas e Pedidos")
+
+st.markdown(
+    f"<div style='font-size:.82rem;color:{TXT_S};margin-bottom:12px'>"
+    f"Analisa o intervalo médio de dias entre grupos de <b>4 notas</b> consecutivas de cada cliente "
+    f"e entre grupos de <b>4 pedidos</b> consecutivos. Clientes/pedidos com menos de 4 registros são excluídos.</div>",
+    unsafe_allow_html=True,
+)
+
+tab_r_nota, tab_r_ped = st.tabs(["📄 A Cada 4 Notas por Cliente", "🛒 A Cada 4 Pedidos por Cliente"])
+
+# ── Helper: calcula media de dias entre grupos de N eventos ──────────────────
+def _avg_days_every_n(dates_sorted, n=4):
+    """
+    Dado uma lista de datas ordenadas, calcula a media de dias
+    entre o inicio de cada grupo de N e o inicio do proximo grupo.
+    Retorna lista de (grupo_inicio, media_dias) ou [] se insuficiente.
+    """
+    results = []
+    dates = sorted(dates_sorted)
+    if len(dates) < n:
+        return results
+    for i in range(0, len(dates) - n + 1, n):
+        grupo_inicio = dates[i]
+        grupo_fim    = dates[min(i + n, len(dates)) - 1]
+        if i + n < len(dates):
+            proximo_inicio = dates[i + n]
+            dias = (proximo_inicio - grupo_fim).days
+            results.append({
+                "grupo":         i // n + 1,
+                "data_inicio":   grupo_inicio,
+                "data_fim":      grupo_fim,
+                "dias_ate_prox": dias,
+            })
+    return results
+
+
+# ── TAB 1: A cada 4 notas por cliente ────────────────────────────────────────
+with tab_r_nota:
+    # Agrupa datas de emissão de notas por cliente
+    notas_cli_dates = (
+        df_base.groupby(["nome_cliente","numero_nota"])["emissao"]
+        .min().reset_index()
+        .sort_values(["nome_cliente","emissao"])
+    )
+
+    ritmo_notas_rows = []
+    for cli, grp in notas_cli_dates.groupby("nome_cliente"):
+        dates = list(grp["emissao"].dt.date)
+        analise = _avg_days_every_n(dates, n=4)
+        if analise:
+            media_geral = np.mean([a["dias_ate_prox"] for a in analise])
+            ritmo_notas_rows.append({
+                "Cliente":         cli,
+                "Total Notas":     len(dates),
+                "Grupos de 4":     len(analise),
+                "Média Dias/Grupo": round(media_geral, 1),
+                "Min Dias":        int(min(a["dias_ate_prox"] for a in analise)),
+                "Max Dias":        int(max(a["dias_ate_prox"] for a in analise)),
+            })
+
+    if ritmo_notas_rows:
+        df_ritmo_notas = pd.DataFrame(ritmo_notas_rows).sort_values("Média Dias/Grupo")
+
+        def _rn_color(v):
+            if v <= 14:   return C_GREEN
+            elif v <= 30: return C_AMBER
+            else:         return C_ORANGE
+
+        cd_rn = df_ritmo_notas[["Total Notas","Grupos de 4","Min Dias","Max Dias"]].values.tolist()
+        fig_rn = go.Figure(go.Bar(
+            x=df_ritmo_notas["Média Dias/Grupo"],
+            y=df_ritmo_notas["Cliente"],
+            orientation="h",
+            marker=dict(
+                color=[_rn_color(v) for v in df_ritmo_notas["Média Dias/Grupo"]],
+                opacity=0.85, line=dict(color=BG_PLOT, width=0.5),
+            ),
+            text=df_ritmo_notas["Média Dias/Grupo"].apply(lambda v: f"{fmt_br(v,1)} dias"),
+            textposition="outside", textfont=dict(size=10, color=TXT_H),
+            customdata=cd_rn,
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                f"<span style='color:{C_CYAN}'>📅 Média dias entre grupos de 4</span>  <b>%{{x:.1f}} dias</b><br>"
+                f"<span style='color:{C_TEAL}'>📄 Total notas</span>  %{{customdata[0]:.0f}}<br>"
+                f"<span style='color:{C_VIOLET}'>🔢 Grupos de 4</span>  %{{customdata[1]:.0f}}<br>"
+                f"<span style='color:{C_GREEN}'>⬇️ Mín dias</span>  %{{customdata[2]}} dias<br>"
+                f"<span style='color:{C_RED}'>⬆️ Máx dias</span>  %{{customdata[3]}} dias"
+                "<extra></extra>"
+            ),
+            name="",
+        ))
+        for ref, color, label in [(7, C_GREEN, "7d"), (14, C_AMBER, "14d"), (30, C_ORANGE, "30d")]:
+            fig_rn.add_vline(x=ref, line_width=1, line_color=color, line_dash="dash",
+                             annotation_text=label, annotation_font_color=color,
+                             annotation_position="top")
+        fig_layout(fig_rn,
+            title=dict(text="Média de dias entre grupos de 4 notas consecutivas por cliente"),
+            height=max(320, len(df_ritmo_notas) * 50),
+            margin=dict(t=40, b=10, l=5, r=160),
+            yaxis=dict(type="category", showgrid=False, tickfont=dict(color=TXT_M, size=10)),
+            xaxis=dict(showgrid=True, gridcolor=GRID, title_text="Dias (média entre grupos)",
+                       title_font=dict(color=TXT_S), tickfont=dict(color=TXT_S)),
+        )
+        st.plotly_chart(fig_rn, use_container_width=True)
+
+        # Formata tabela
+        _tbl_rn = df_ritmo_notas.copy()
+        _tbl_rn["Média Dias/Grupo"] = _tbl_rn["Média Dias/Grupo"].apply(lambda v: fmt_br(v, 1) + " dias")
+        _tbl_rn["Min Dias"] = _tbl_rn["Min Dias"].apply(lambda v: f"{v} dias")
+        _tbl_rn["Max Dias"] = _tbl_rn["Max Dias"].apply(lambda v: f"{v} dias")
+        st.dataframe(_tbl_rn, height=280, hide_index=True, use_container_width=True)
+    else:
+        st.info("Nenhum cliente possui 4 ou mais notas no período para análise de ritmo.")
+
+# ── TAB 2: A cada 4 pedidos por cliente ──────────────────────────────────────
+with tab_r_ped:
+    pedidos_dates = (
+        df_base[df_base["tem_pedido"]]
+        .groupby(["nome_cliente","pedido_clean"])["emissao"]
+        .min().reset_index()
+        .sort_values(["nome_cliente","emissao"])
+    )
+
+    ritmo_ped_rows = []
+    for cli, grp in pedidos_dates.groupby("nome_cliente"):
+        dates = list(grp["emissao"].dt.date)
+        analise = _avg_days_every_n(dates, n=4)
+        if analise:
+            media_geral = np.mean([a["dias_ate_prox"] for a in analise])
+            ritmo_ped_rows.append({
+                "Cliente":         cli,
+                "Total Pedidos":   len(dates),
+                "Grupos de 4":     len(analise),
+                "Média Dias/Grupo": round(media_geral, 1),
+                "Min Dias":        int(min(a["dias_ate_prox"] for a in analise)),
+                "Max Dias":        int(max(a["dias_ate_prox"] for a in analise)),
+            })
+
+    if ritmo_ped_rows:
+        df_ritmo_ped = pd.DataFrame(ritmo_ped_rows).sort_values("Média Dias/Grupo")
+
+        cd_rp = df_ritmo_ped[["Total Pedidos","Grupos de 4","Min Dias","Max Dias"]].values.tolist()
+        fig_rp = go.Figure(go.Bar(
+            x=df_ritmo_ped["Média Dias/Grupo"],
+            y=df_ritmo_ped["Cliente"],
+            orientation="h",
+            marker=dict(
+                color=[_rn_color(v) for v in df_ritmo_ped["Média Dias/Grupo"]],
+                opacity=0.85, line=dict(color=BG_PLOT, width=0.5),
+            ),
+            text=df_ritmo_ped["Média Dias/Grupo"].apply(lambda v: f"{fmt_br(v,1)} dias"),
+            textposition="outside", textfont=dict(size=10, color=TXT_H),
+            customdata=cd_rp,
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                f"<span style='color:{C_CYAN}'>📅 Média dias entre grupos de 4</span>  <b>%{{x:.1f}} dias</b><br>"
+                f"<span style='color:{C_TEAL}'>🛒 Total pedidos</span>  %{{customdata[0]:.0f}}<br>"
+                f"<span style='color:{C_VIOLET}'>🔢 Grupos de 4</span>  %{{customdata[1]:.0f}}<br>"
+                f"<span style='color:{C_GREEN}'>⬇️ Mín dias</span>  %{{customdata[2]}} dias<br>"
+                f"<span style='color:{C_RED}'>⬆️ Máx dias</span>  %{{customdata[3]}} dias"
+                "<extra></extra>"
+            ),
+            name="",
+        ))
+        for ref, color, label in [(7, C_GREEN, "7d"), (14, C_AMBER, "14d"), (30, C_ORANGE, "30d")]:
+            fig_rp.add_vline(x=ref, line_width=1, line_color=color, line_dash="dash",
+                             annotation_text=label, annotation_font_color=color,
+                             annotation_position="top")
+        fig_layout(fig_rp,
+            title=dict(text="Média de dias entre grupos de 4 pedidos consecutivos por cliente"),
+            height=max(320, len(df_ritmo_ped) * 50),
+            margin=dict(t=40, b=10, l=5, r=160),
+            yaxis=dict(type="category", showgrid=False, tickfont=dict(color=TXT_M, size=10)),
+            xaxis=dict(showgrid=True, gridcolor=GRID, title_text="Dias (média entre grupos)",
+                       title_font=dict(color=TXT_S), tickfont=dict(color=TXT_S)),
+        )
+        st.plotly_chart(fig_rp, use_container_width=True)
+
+        _tbl_rp = df_ritmo_ped.copy()
+        _tbl_rp["Média Dias/Grupo"] = _tbl_rp["Média Dias/Grupo"].apply(lambda v: fmt_br(v, 1) + " dias")
+        _tbl_rp["Min Dias"] = _tbl_rp["Min Dias"].apply(lambda v: f"{v} dias")
+        _tbl_rp["Max Dias"] = _tbl_rp["Max Dias"].apply(lambda v: f"{v} dias")
+        st.dataframe(_tbl_rp, height=280, hide_index=True, use_container_width=True)
+    else:
+        st.info("Nenhum cliente possui 4 ou mais pedidos no período para análise de ritmo.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1703,7 +2409,7 @@ with tab_vol_ped:
 
 # ── TAB 3: POR SEMANA ─────────────────────────────────────────────────────────
 with tab_vol_sem:
-    vol_sem = (
+    vol_sem_raw = (
         df.groupby(["semana_sort","semana_label","date_range"])
         .agg(
             kilos    =("kilos",        "sum"),
@@ -1715,6 +2421,8 @@ with tab_vol_sem:
         )
         .reset_index().sort_values("semana_sort")
     )
+    vol_sem = _reindex_to_all_weeks(vol_sem_raw)
+
     vol_sem["kg_por_cliente"] = (vol_sem["kilos"] / vol_sem["n_clientes"].replace(0, np.nan)).round(1)
     vol_sem["kg_por_nota"]    = (vol_sem["kilos"] / vol_sem["n_notas"].replace(0, np.nan)).round(1)
 
@@ -1747,7 +2455,7 @@ with tab_vol_sem:
     fig_vs2.add_trace(go.Bar(
         x=vol_sem["semana_label"], y=vol_sem["kilos"], name="Total Kg",
         marker=dict(color=C_AMBER, opacity=0.85, line=dict(color=BG_PLOT, width=0.5)),
-        text=vol_sem["kilos"].apply(lambda v: f"{v:,.1f}"),
+        text=vol_sem["kilos"].apply(lambda v: fmt_br(v, 1)),
         textposition="outside", textfont=dict(size=11, color=TXT_H),
         customdata=cd_vs, hovertemplate=hover_vs,
     ), secondary_y=False)
@@ -1756,7 +2464,7 @@ with tab_vol_sem:
         mode="lines+markers+text", name="Kg/Cliente",
         line=dict(color=C_CYAN, width=2),
         marker=dict(size=6, color=C_CYAN),
-        text=vol_sem["kg_por_cliente"].apply(lambda v: f"{v:,.0f}"),
+        text=vol_sem["kg_por_cliente"].apply(lambda v: fmt_br(v, 0)),
         textposition="top center", textfont=dict(size=9, color=C_CYAN),
         hovertemplate="<b>%{x}</b><br>Kg/Cliente: <b>%{y:,.1f} kg</b><extra></extra>",
     ), secondary_y=True)
@@ -1873,7 +2581,11 @@ with tab_vol_nota:
 # ═══════════════════════════════════════════════════════════════════════════════
 sec("📋", "Situação NF e Tipo de Transação")
 
-# ── helper: pre-format customdata to avoid NaN / literal variable-name bug ────
+# ── helper: monta o hover completo como uma string HTML por fatia ─────────────
+# Plotly Pie NÃO suporta %{customdata[i]} multi-coluna de forma confiável:
+# arrays numpy são serializados como linha única, e format-specs (:,.1f) não
+# funcionam em traces Pie. Solução: uma única string HTML pré-montada por fatia,
+# acessada via %{customdata} sem índice.
 def _pie_customdata(grp_df, total_col="kilos"):
     grp_df = grp_df.copy()
     grp_df["kilos"]    = grp_df["kilos"].fillna(0)
@@ -1881,16 +2593,22 @@ def _pie_customdata(grp_df, total_col="kilos"):
     grp_df["unidades"] = grp_df["unidades"].fillna(0)
     tot = grp_df[total_col].sum()
     grp_df["pct_fmt"]  = grp_df[total_col].apply(
-        lambda v: f"{v / tot * 100:.1f}%" if tot > 0 else "0.0%"
+        lambda v: f"{v / tot * 100:.1f}%" if tot > 0 else "0,0%"
     )
-    grp_df["cx_fmt"]   = grp_df["caixas"].apply(lambda v: f"{v:,.1f} cx")
-    grp_df["un_fmt"]   = grp_df["unidades"].apply(lambda v: f"{v:,.0f} un")
+    grp_df["cx_fmt"]   = grp_df["caixas"].apply(lambda v: fmt_br(v, 1) + " cx")
+    grp_df["un_fmt"]   = grp_df["unidades"].apply(lambda v: fmt_br(v, 0) + " un")
     grp_df["kg_fmt"]   = grp_df["kilos"].apply(fmt_peso)
     grp_df["pct_val"]  = grp_df[total_col].apply(
         lambda v: round(v / tot * 100, 1) if tot > 0 else 0.0
     )
-    # Use numeric values — Plotly.js indexes numeric customdata reliably with %{customdata[i]}
-    cd = grp_df[["kilos", "caixas", "unidades", "pct_val"]].values
+    # Uma string HTML completa por fatia — %{customdata} no hovertemplate
+    grp_df["_hover_body"] = grp_df.apply(lambda r: (
+        f"<span style='color:{C_CYAN}'>⚖️ Kilos</span>  <b>{r['kg_fmt']}</b><br>"
+        f"<span style='color:{C_TEAL}'>📦 Caixas</span>  {r['cx_fmt']}<br>"
+        f"<span style='color:{C_AMBER}'>🔢 Unidades</span>  {r['un_fmt']}<br>"
+        f"<span style='color:{C_VIOLET}'>📊 Participação</span>  <b>{r['pct_fmt']}</b>"
+    ), axis=1)
+    cd = grp_df["_hover_body"].tolist()
     return grp_df, cd
 
 col_s, col_t = st.columns(2)
@@ -1926,17 +2644,14 @@ with col_s:
         customdata=cd_s,
         hovertemplate=(
             "<b>%{label}</b><br>"
-            f"<span style='color:{C_CYAN}'>⚖️ Kilos</span>  <b>%{{customdata[0]:,.1f}} kg</b><br>"
-            f"<span style='color:{C_TEAL}'>📦 Caixas</span>  %{{customdata[1]:,.1f}} cx<br>"
-            f"<span style='color:{C_AMBER}'>🔢 Unidades</span>  %{{customdata[2]:,.0f}} un<br>"
-            f"<span style='color:{C_VIOLET}'>📊 Participação</span>  <b>%{{customdata[3]:.1f}}%</b>"
+            "%{customdata}"
             "<extra></extra>"
         ),
         sort=False,
         direction="clockwise",
     ))
     fig_sit.add_annotation(
-        text=f"<b>{total_sit_kg:,.0f}</b><br><span style='font-size:10px;color:{TXT_S}'>kg total</span>",
+        text=f"<b>{fmt_br(total_sit_kg, 1)}</b><br><span style='font-size:10px;color:{TXT_S}'>kg total</span>",
         x=0.5, y=0.5, showarrow=False,
         font=dict(size=20, color=TXT_H, family="Montserrat, sans-serif"),
         align="center",
@@ -1994,17 +2709,14 @@ with col_t:
         customdata=cd_t,
         hovertemplate=(
             "<b>%{label}</b><br>"
-            f"<span style='color:{C_CYAN}'>⚖️ Kilos</span>  <b>%{{customdata[0]:,.1f}} kg</b><br>"
-            f"<span style='color:{C_TEAL}'>📦 Caixas</span>  %{{customdata[1]:,.1f}} cx<br>"
-            f"<span style='color:{C_AMBER}'>🔢 Unidades</span>  %{{customdata[2]:,.0f}} un<br>"
-            f"<span style='color:{C_VIOLET}'>📊 Participação</span>  <b>%{{customdata[3]:.1f}}%</b>"
+            "%{customdata}"
             "<extra></extra>"
         ),
         sort=False,
         direction="clockwise",
     ))
     fig_tra.add_annotation(
-        text=f"<b>{total_tra_kg:,.0f}</b><br><span style='font-size:10px;color:{TXT_S}'>kg total</span>",
+        text=f"<b>{fmt_br(total_tra_kg, 1)}</b><br><span style='font-size:10px;color:{TXT_S}'>kg total</span>",
         x=0.5, y=0.5, showarrow=False,
         font=dict(size=20, color=TXT_H, family="Montserrat, sans-serif"),
         align="center",
@@ -2090,7 +2802,7 @@ st.sidebar.markdown(f"<hr style='border-color:{BORDER};margin:10px 0'>", unsafe_
 st.sidebar.markdown(
     f"<div style='font-size:.72rem;color:{TXT_S};text-align:center;padding-top:4px;line-height:1.7'>"
     f"Dashboard de Faturamento v3<br>"
-    f"<span style='color:{C_CYAN}'>{len(df_raw):,}</span> registros · "
+    f"<span style='color:{C_CYAN}'>{fmt_br(len(df_raw), 0)}</span> registros · "
     f"<span style='color:{C_TEAL}'>{df_raw['semana_sort'].nunique()}</span> semanas<br>"
     f"<span style='color:{C_AMBER}'>{df_raw['codigo_produto'].nunique()}</span> produtos · "
     f"<span style='color:{C_VIOLET}'>{df_raw['nome_cliente'].nunique()}</span> clientes"
