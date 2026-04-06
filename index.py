@@ -1759,6 +1759,92 @@ with tab_ev3:
     st.plotly_chart(evolution_lines("unidades", lambda v: fmt_br(v,0)+"un",  "Unidades (un)"), use_container_width=True)
 
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEÇÃO 4B — EVOLUÇÃO SEMANAL POR CLIENTE
+# ═══════════════════════════════════════════════════════════════════════════════
+sec("👥", "Evolução Semanal por Cliente")
+
+tab_cli_ev1, tab_cli_ev2, tab_cli_ev3 = st.tabs(["⚖️ Kilos", "📦 Caixas", "🔢 Unidades"])
+
+
+def evolution_lines_cliente(metric_col, fmt_fn, y_title):
+    cli_wk_raw = (
+        df.groupby(["semana_sort", "semana_label", "date_range", "nome_cliente"])
+        .agg(
+            val       =(metric_col,      "sum"),
+            kilos     =("kilos",         "sum"),
+            caixas    =("caixas",        "sum"),
+            unidades  =("unidades",      "sum"),
+            n_produtos=("codigo_produto","nunique"),
+        )
+        .reset_index().sort_values("semana_sort")
+    )
+    clientes = sorted(cli_wk_raw["nome_cliente"].unique())
+
+    cli_wk = _reindex_to_all_weeks(cli_wk_raw, extra_keys=["nome_cliente"])
+    _val_map = cli_wk_raw.set_index(["semana_sort", "nome_cliente"])[
+        ["val", "kilos", "caixas", "unidades", "n_produtos"]
+    ]
+    cli_wk = cli_wk.set_index(["semana_sort", "nome_cliente"])
+    cli_wk.update(_val_map)
+    cli_wk = cli_wk.reset_index().sort_values(["semana_sort", "nome_cliente"])
+    for _mc in ["val", "kilos", "caixas", "unidades", "n_produtos"]:
+        if _mc in cli_wk.columns:
+            cli_wk[_mc] = cli_wk[_mc].fillna(0)
+
+    _cli_palette = [
+        C_CYAN, C_TEAL, C_AMBER, C_VIOLET, C_ORANGE, C_GREEN, C_RED,
+        "#EC4899", "#818CF8", "#34D399", "#F472B6", "#60A5FA", "#A3E635",
+        "#FACC15", "#FB7185", "#4ADE80", "#38BDF8", "#C084FC",
+    ]
+    cli_colors = {c: _cli_palette[i % len(_cli_palette)] for i, c in enumerate(sorted(clientes))}
+
+    hover_ev_cli = (
+        "<b>%{fullData.name}</b><br>"
+        f"<span style='color:{TXT_S}'>📅 %{{customdata[0]}}</span><br>"
+        f"<span style='color:{C_CYAN}'>⚖️ Kilos</span>  <b>%{{customdata[1]:,.1f}} kg</b><br>"
+        f"<span style='color:{C_TEAL}'>📦 Caixas</span>  <b>%{{customdata[2]:,.1f}} cx</b><br>"
+        f"<span style='color:{C_AMBER}'>🔢 Unidades</span>  <b>%{{customdata[3]:,.0f}} un</b><br>"
+        f"<span style='color:{C_ORANGE}'>🏷️ Produtos distintos</span>  %{{customdata[4]:.0f}}"
+        "<extra></extra>"
+    )
+    fig = go.Figure()
+    for cli in clientes:
+        sub   = cli_wk[cli_wk["nome_cliente"] == cli]
+        color = cli_colors[cli]
+        cd    = sub[["date_range", "kilos", "caixas", "unidades", "n_produtos"]].fillna(0).values.tolist()
+        fig.add_trace(go.Scatter(
+            x=sub["semana_label"], y=sub["val"],
+            mode="lines+markers+text", name=str(cli),
+            line=dict(color=color, width=2),
+            marker=dict(size=7, color=color, line=dict(color=BG_PLOT, width=1.5)),
+            text=sub["val"].apply(fmt_fn),
+            textposition="top center", textfont=dict(size=8, color=color),
+            customdata=cd, hovertemplate=hover_ev_cli,
+        ))
+    all_wk = [lbl_map[w] for w in ALL_RANGE_SORTS if w in lbl_map]
+    fig_layout(fig,
+        height=max(460, 30 * len(clientes) + 300),
+        hovermode="x unified",
+        legend=dict(orientation="h", y=-0.22, font=dict(color=TXT_M, size=10)),
+        margin=dict(t=20, b=100, l=5, r=10),
+        xaxis=dict(type="category", categoryorder="array", categoryarray=all_wk,
+                   showgrid=False, tickfont=dict(color=TXT_S, size=9)),
+        yaxis=dict(showgrid=True, gridcolor=GRID, title_text=y_title,
+                   title_font=dict(color=TXT_S), tickfont=dict(color=TXT_S)),
+    )
+    return fig
+
+
+with tab_cli_ev1:
+    st.plotly_chart(evolution_lines_cliente("kilos",    lambda v: fmt_br(v, 1) + "kg", "Kilos (kg)"),    use_container_width=True)
+with tab_cli_ev2:
+    st.plotly_chart(evolution_lines_cliente("caixas",   lambda v: fmt_br(v, 1) + "cx", "Caixas (cx)"),   use_container_width=True)
+with tab_cli_ev3:
+    st.plotly_chart(evolution_lines_cliente("unidades", lambda v: fmt_br(v, 0) + "un", "Unidades (un)"), use_container_width=True)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SEÇÃO 5 — PEDIDOS POR CLIENTE  +  TRANSPARÊNCIA DE NOTAS
 # ═══════════════════════════════════════════════════════════════════════════════
