@@ -2071,27 +2071,14 @@ else:
     st.info("Não há clientes com mais de 1 pedido no período selecionado para calcular distância.")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SEÇÃO 6B — ANÁLISE DE RITMO: MÉDIA DE DIAS A CADA 4 NOTAS / PEDIDOS
-# ═══════════════════════════════════════════════════════════════════════════════
-sec("🔄", "Ritmo de Compra — Média de Dias a Cada 4 Notas e Pedidos")
 
-st.markdown(
-    f"<div style='font-size:.82rem;color:{TXT_S};margin-bottom:12px'>"
-    f"Analisa o intervalo médio de dias entre grupos de <b>4 notas</b> consecutivas de cada cliente "
-    f"e entre grupos de <b>4 pedidos</b> consecutivos. Clientes/pedidos com menos de 4 registros são excluídos.</div>",
-    unsafe_allow_html=True,
-)
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEÇÃO 6B — MÉDIA INTERNA DE DIAS POR LOTE — NOTAS E PEDIDOS
+# ═══════════════════════════════════════════════════════════════════════════════
 
-tab_r_nota, tab_r_ped = st.tabs(["📄 A Cada 4 Notas por Cliente", "🛒 A Cada 4 Pedidos por Cliente"])
 
 # ── Helper: calcula media de dias entre grupos de N eventos ──────────────────
 def _avg_days_every_n(dates_sorted, n=4):
-    """
-    Dado uma lista de datas ordenadas, calcula a media de dias
-    entre o inicio de cada grupo de N e o inicio do proximo grupo.
-    Retorna lista de (grupo_inicio, media_dias) ou [] se insuficiente.
-    """
     results = []
     dates = sorted(dates_sorted)
     if len(dates) < n:
@@ -2103,163 +2090,219 @@ def _avg_days_every_n(dates_sorted, n=4):
             proximo_inicio = dates[i + n]
             dias = (proximo_inicio - grupo_fim).days
             results.append({
-                "grupo":         i // n + 1,
-                "data_inicio":   grupo_inicio,
-                "data_fim":      grupo_fim,
-                "dias_ate_prox": dias,
+                "grupo":           i // n + 1,
+                "data_inicio":     grupo_inicio,
+                "data_fim":        grupo_fim,
+                "proximo_inicio":  proximo_inicio,
+                "dias_ate_prox":   dias,
             })
     return results
 
 
-# ── TAB 1: A cada 4 notas por cliente ────────────────────────────────────────
-with tab_r_nota:
-    # Agrupa datas de emissão de notas por cliente
-    notas_cli_dates = (
-        df_base.groupby(["nome_cliente","numero_nota"])["emissao"]
-        .min().reset_index()
-        .sort_values(["nome_cliente","emissao"])
-    )
+def _rn_color(v):
+    if v <= 7:    return C_GREEN
+    elif v <= 30: return C_AMBER
+    else:         return C_ORANGE
 
-    ritmo_notas_rows = []
-    for cli, grp in notas_cli_dates.groupby("nome_cliente"):
-        dates = list(grp["emissao"].dt.date)
-        analise = _avg_days_every_n(dates, n=4)
-        if analise:
-            media_geral = np.mean([a["dias_ate_prox"] for a in analise])
-            ritmo_notas_rows.append({
-                "Cliente":         cli,
-                "Total Notas":     len(dates),
-                "Grupos de 4":     len(analise),
-                "Média Dias/Grupo": round(media_geral, 1),
-                "Min Dias":        int(min(a["dias_ate_prox"] for a in analise)),
-                "Max Dias":        int(max(a["dias_ate_prox"] for a in analise)),
-            })
 
-    if ritmo_notas_rows:
-        df_ritmo_notas = pd.DataFrame(ritmo_notas_rows).sort_values("Média Dias/Grupo")
+def _internal_avg_every_n(dates_sorted, n=4):
+    results = []
+    dates = sorted(dates_sorted)
+    num_lotes_completos = len(dates) // n
+    for i in range(num_lotes_completos):
+        lote = dates[i * n : (i + 1) * n]
+        intervalos = [(lote[j + 1] - lote[j]).days for j in range(n - 1)]
+        media = round(np.mean(intervalos), 1)
+        results.append({
+            "lote":               i + 1,
+            "data_inicio":        lote[0],
+            "data_fim":           lote[-1],
+            "intervalos_internos": intervalos,
+            "media_interna":      media,
+        })
+    return results
 
-        def _rn_color(v):
-            if v <= 14:   return C_GREEN
-            elif v <= 30: return C_AMBER
-            else:         return C_ORANGE
 
-        cd_rn = df_ritmo_notas[["Total Notas","Grupos de 4","Min Dias","Max Dias"]].values.tolist()
-        fig_rn = go.Figure(go.Bar(
-            x=df_ritmo_notas["Média Dias/Grupo"],
-            y=df_ritmo_notas["Cliente"],
-            orientation="h",
-            marker=dict(
-                color=[_rn_color(v) for v in df_ritmo_notas["Média Dias/Grupo"]],
-                opacity=0.85, line=dict(color=BG_PLOT, width=0.5),
-            ),
-            text=df_ritmo_notas["Média Dias/Grupo"].apply(lambda v: f"{fmt_br(v,1)} dias"),
-            textposition="outside", textfont=dict(size=10, color=TXT_H),
-            customdata=cd_rn,
+_RITMO_PALETTE = [
+    C_CYAN, C_TEAL, C_AMBER, C_VIOLET, C_ORANGE, C_GREEN, C_RED,
+    "#EC4899", "#818CF8", "#34D399", "#F472B6", "#60A5FA", "#A3E635",
+]
+
+
+def _render_ritmo_interno_chart(data_por_cliente, label_tipo):
+    if not data_por_cliente:
+        return
+
+    fig = go.Figure()
+    for idx, (cli, lotes) in enumerate(sorted(data_por_cliente.items())):
+        color = _RITMO_PALETTE[idx % len(_RITMO_PALETTE)]
+        xs    = [l["lote"] for l in lotes]
+        ys    = [l["media_interna"] for l in lotes]
+        hover_labels = [
+            f"{l['data_inicio'].strftime('%d/%m/%y')} -> {l['data_fim'].strftime('%d/%m/%y')}<br>"
+            + "  |  ".join(f"{d}d" for d in l["intervalos_internos"])
+            for l in lotes
+        ]
+        fig.add_trace(go.Scatter(
+            x=xs,
+            y=ys,
+            mode="lines+markers",
+            name=cli,
+            line=dict(color=color, width=2),
+            marker=dict(color=color, size=9, symbol="circle",
+                        line=dict(color=BG_APP, width=1.5)),
+            text=hover_labels,
             hovertemplate=(
-                "<b>%{y}</b><br>"
-                f"<span style='color:{C_CYAN}'>📅 Média dias entre grupos de 4</span>  <b>%{{x:.1f}} dias</b><br>"
-                f"<span style='color:{C_TEAL}'>📄 Total notas</span>  %{{customdata[0]:.0f}}<br>"
-                f"<span style='color:{C_VIOLET}'>🔢 Grupos de 4</span>  %{{customdata[1]:.0f}}<br>"
-                f"<span style='color:{C_GREEN}'>⬇️ Mín dias</span>  %{{customdata[2]}} dias<br>"
-                f"<span style='color:{C_RED}'>⬆️ Máx dias</span>  %{{customdata[3]}} dias"
+                f"<b>{cli}</b><br>"
+                f"<span style='color:{C_AMBER}'>Lote #%{{x}}</span><br>"
+                "%{text}<br>"
+                f"<span style='color:{C_CYAN}'>Media interna</span>  "
+                "<b>%{y:.1f} dias</b>"
                 "<extra></extra>"
             ),
-            name="",
         ))
-        for ref, color, label in [(7, C_GREEN, "7d"), (14, C_AMBER, "14d"), (30, C_ORANGE, "30d")]:
-            fig_rn.add_vline(x=ref, line_width=1, line_color=color, line_dash="dash",
-                             annotation_text=label, annotation_font_color=color,
-                             annotation_position="top")
-        fig_layout(fig_rn,
-            title=dict(text="Média de dias entre grupos de 4 notas consecutivas por cliente"),
-            height=max(320, len(df_ritmo_notas) * 50),
-            margin=dict(t=40, b=10, l=5, r=160),
-            yaxis=dict(type="category", showgrid=False, tickfont=dict(color=TXT_M, size=10)),
-            xaxis=dict(showgrid=True, gridcolor=GRID, title_text="Dias (média entre grupos)",
-                       title_font=dict(color=TXT_S), tickfont=dict(color=TXT_S)),
-        )
-        st.plotly_chart(fig_rn, use_container_width=True)
 
-        # Formata tabela
-        _tbl_rn = df_ritmo_notas.copy()
-        _tbl_rn["Média Dias/Grupo"] = _tbl_rn["Média Dias/Grupo"].apply(lambda v: fmt_br(v, 1) + " dias")
-        _tbl_rn["Min Dias"] = _tbl_rn["Min Dias"].apply(lambda v: f"{v} dias")
-        _tbl_rn["Max Dias"] = _tbl_rn["Max Dias"].apply(lambda v: f"{v} dias")
-        st.dataframe(_tbl_rn, height=280, hide_index=True, use_container_width=True)
-    else:
-        st.info("Nenhum cliente possui 4 ou mais notas no período para análise de ritmo.")
+    for ref, color, lbl in [(7, C_GREEN, "7d"), (14, C_AMBER, "14d"), (30, C_ORANGE, "30d")]:
+        fig.add_hline(y=ref, line_width=1, line_color=color, line_dash="dash",
+                      annotation_text=lbl, annotation_font_color=color,
+                      annotation_position="right")
 
-# ── TAB 2: A cada 4 pedidos por cliente ──────────────────────────────────────
-with tab_r_ped:
-    pedidos_dates = (
-        df_base[df_base["tem_pedido"]]
-        .groupby(["nome_cliente","pedido_clean"])["emissao"]
-        .min().reset_index()
-        .sort_values(["nome_cliente","emissao"])
+    max_lote = max(
+        (l["lote"] for lotes in data_por_cliente.values() for l in lotes),
+        default=1,
     )
+    fig_layout(
+        fig,
+        title=dict(
+            text=(
+                f"Evolucao da media interna de dias entre os 4 {label_tipo} de cada lote "
+                f"- 1 linha por cliente"
+            )
+        ),
+        height=max(420, 40 * len(data_por_cliente) + 260),
+        margin=dict(t=50, b=10, l=10, r=200),
+        xaxis=dict(
+            title_text="Lote # (grupo de 4 registros consecutivos)",
+            title_font=dict(color=TXT_S),
+            tickmode="linear",
+            dtick=1,
+            range=[0.5, max_lote + 0.5],
+            showgrid=True, gridcolor=GRID,
+            tickfont=dict(color=TXT_S),
+        ),
+        yaxis=dict(
+            title_text="Media de dias entre os 4 registros",
+            title_font=dict(color=TXT_S),
+            showgrid=True, gridcolor=GRID,
+            tickfont=dict(color=TXT_S),
+            rangemode="tozero",
+        ),
+        legend=dict(
+            orientation="v", x=1.01, xanchor="left", y=1, yanchor="top",
+            font=dict(color=TXT_M, size=9),
+            bgcolor=BG_SIDEBAR,
+            bordercolor=BORDER,
+            borderwidth=1,
+        ),
+        showlegend=True,
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-    ritmo_ped_rows = []
-    for cli, grp in pedidos_dates.groupby("nome_cliente"):
-        dates = list(grp["emissao"].dt.date)
-        analise = _avg_days_every_n(dates, n=4)
-        if analise:
-            media_geral = np.mean([a["dias_ate_prox"] for a in analise])
-            ritmo_ped_rows.append({
-                "Cliente":         cli,
-                "Total Pedidos":   len(dates),
-                "Grupos de 4":     len(analise),
-                "Média Dias/Grupo": round(media_geral, 1),
-                "Min Dias":        int(min(a["dias_ate_prox"] for a in analise)),
-                "Max Dias":        int(max(a["dias_ate_prox"] for a in analise)),
-            })
 
-    if ritmo_ped_rows:
-        df_ritmo_ped = pd.DataFrame(ritmo_ped_rows).sort_values("Média Dias/Grupo")
+# -- ANALISE 1: Media interna a cada 4 Notas por Cliente ----------------------
+st.markdown(
+    f"<div class='sec-header' style='margin-top:10px'>"
+    f"<span>📄</span> Media Interna de Dias por Lote de 4 Notas — por Cliente"
+    f"</div>",
+    unsafe_allow_html=True,
+)
+st.markdown(
+    f"<div class='tip'>Cada ponto e a media dos 3 intervalos internos do lote "
+    f"(1a->2a nota, 2a->3a nota, 3a->4a nota). "
+    f"Passe o mouse para ver as datas e os intervalos individuais.</div>",
+    unsafe_allow_html=True,
+)
 
-        cd_rp = df_ritmo_ped[["Total Pedidos","Grupos de 4","Min Dias","Max Dias"]].values.tolist()
-        fig_rp = go.Figure(go.Bar(
-            x=df_ritmo_ped["Média Dias/Grupo"],
-            y=df_ritmo_ped["Cliente"],
-            orientation="h",
-            marker=dict(
-                color=[_rn_color(v) for v in df_ritmo_ped["Média Dias/Grupo"]],
-                opacity=0.85, line=dict(color=BG_PLOT, width=0.5),
-            ),
-            text=df_ritmo_ped["Média Dias/Grupo"].apply(lambda v: f"{fmt_br(v,1)} dias"),
-            textposition="outside", textfont=dict(size=10, color=TXT_H),
-            customdata=cd_rp,
-            hovertemplate=(
-                "<b>%{y}</b><br>"
-                f"<span style='color:{C_CYAN}'>📅 Média dias entre grupos de 4</span>  <b>%{{x:.1f}} dias</b><br>"
-                f"<span style='color:{C_TEAL}'>🛒 Total pedidos</span>  %{{customdata[0]:.0f}}<br>"
-                f"<span style='color:{C_VIOLET}'>🔢 Grupos de 4</span>  %{{customdata[1]:.0f}}<br>"
-                f"<span style='color:{C_GREEN}'>⬇️ Mín dias</span>  %{{customdata[2]}} dias<br>"
-                f"<span style='color:{C_RED}'>⬆️ Máx dias</span>  %{{customdata[3]}} dias"
-                "<extra></extra>"
-            ),
-            name="",
-        ))
-        for ref, color, label in [(7, C_GREEN, "7d"), (14, C_AMBER, "14d"), (30, C_ORANGE, "30d")]:
-            fig_rp.add_vline(x=ref, line_width=1, line_color=color, line_dash="dash",
-                             annotation_text=label, annotation_font_color=color,
-                             annotation_position="top")
-        fig_layout(fig_rp,
-            title=dict(text="Média de dias entre grupos de 4 pedidos consecutivos por cliente"),
-            height=max(320, len(df_ritmo_ped) * 50),
-            margin=dict(t=40, b=10, l=5, r=160),
-            yaxis=dict(type="category", showgrid=False, tickfont=dict(color=TXT_M, size=10)),
-            xaxis=dict(showgrid=True, gridcolor=GRID, title_text="Dias (média entre grupos)",
-                       title_font=dict(color=TXT_S), tickfont=dict(color=TXT_S)),
-        )
-        st.plotly_chart(fig_rp, use_container_width=True)
+notas_cli_dates = (
+    df_base.groupby(["nome_cliente","numero_nota"])["emissao"]
+    .min().reset_index()
+    .sort_values(["nome_cliente","emissao"])
+)
 
-        _tbl_rp = df_ritmo_ped.copy()
-        _tbl_rp["Média Dias/Grupo"] = _tbl_rp["Média Dias/Grupo"].apply(lambda v: fmt_br(v, 1) + " dias")
-        _tbl_rp["Min Dias"] = _tbl_rp["Min Dias"].apply(lambda v: f"{v} dias")
-        _tbl_rp["Max Dias"] = _tbl_rp["Max Dias"].apply(lambda v: f"{v} dias")
-        st.dataframe(_tbl_rp, height=280, hide_index=True, use_container_width=True)
-    else:
-        st.info("Nenhum cliente possui 4 ou mais pedidos no período para análise de ritmo.")
+_notas_interno = {}
+for cli, grp in notas_cli_dates.groupby("nome_cliente"):
+    dates   = list(grp["emissao"].dt.date)
+    interno = _internal_avg_every_n(dates, n=4)
+    if interno:
+        _notas_interno[cli] = interno
+
+if _notas_interno:
+    _render_ritmo_interno_chart(_notas_interno, "notas")
+
+    with st.expander("Tabela: media interna por lote (notas)"):
+        _rows_int = []
+        for cli, lotes in sorted(_notas_interno.items()):
+            for l in lotes:
+                _rows_int.append({
+                    "Cliente":                  cli,
+                    "Lote #":                   l["lote"],
+                    "1a nota do lote":          l["data_inicio"].strftime("%d/%m/%Y"),
+                    "4a nota do lote":          l["data_fim"].strftime("%d/%m/%Y"),
+                    "Intervalos internos (dias)": "  |  ".join(str(d) for d in l["intervalos_internos"]),
+                    "Media interna (dias)":     l["media_interna"],
+                })
+        st.dataframe(pd.DataFrame(_rows_int), height=300, hide_index=True, use_container_width=True)
+else:
+    st.info("Nenhum cliente possui 4 ou mais notas no periodo para analise de media interna por lote.")
+
+
+# -- ANALISE 2: Media interna a cada 4 Pedidos por Cliente --------------------
+st.markdown(
+    f"<div class='sec-header' style='margin-top:28px'>"
+    f"<span>🛒</span> Media Interna de Dias por Lote de 4 Pedidos — por Cliente"
+    f"</div>",
+    unsafe_allow_html=True,
+)
+st.markdown(
+    f"<div class='tip'>Cada ponto e a media dos 3 intervalos internos do lote "
+    f"(1o->2o pedido, 2o->3o pedido, 3o->4o pedido). "
+    f"Apenas pedidos com numero identificado sao considerados.</div>",
+    unsafe_allow_html=True,
+)
+
+pedidos_dates = (
+    df_base[df_base["tem_pedido"]]
+    .groupby(["nome_cliente","pedido_clean"])["emissao"]
+    .min().reset_index()
+    .sort_values(["nome_cliente","emissao"])
+)
+
+_ped_interno = {}
+for cli, grp in pedidos_dates.groupby("nome_cliente"):
+    dates   = list(grp["emissao"].dt.date)
+    interno = _internal_avg_every_n(dates, n=4)
+    if interno:
+        _ped_interno[cli] = interno
+
+if _ped_interno:
+    _render_ritmo_interno_chart(_ped_interno, "pedidos")
+
+    with st.expander("Tabela: media interna por lote (pedidos)"):
+        _rows_int_p = []
+        for cli, lotes in sorted(_ped_interno.items()):
+            for l in lotes:
+                _rows_int_p.append({
+                    "Cliente":                  cli,
+                    "Lote #":                   l["lote"],
+                    "1o pedido do lote":        l["data_inicio"].strftime("%d/%m/%Y"),
+                    "4o pedido do lote":        l["data_fim"].strftime("%d/%m/%Y"),
+                    "Intervalos internos (dias)": "  |  ".join(str(d) for d in l["intervalos_internos"]),
+                    "Media interna (dias)":     l["media_interna"],
+                })
+        st.dataframe(pd.DataFrame(_rows_int_p), height=300, hide_index=True, use_container_width=True)
+else:
+    st.info("Nenhum cliente possui 4 ou mais pedidos no periodo para analise de media interna por lote.")
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
