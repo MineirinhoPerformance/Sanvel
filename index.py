@@ -1915,7 +1915,7 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
                 "Volume medio por pedido (10%) - consistencia no tamanho das compras",
                 "Tendencia (10%) - se o volume esta crescendo, estavel ou caindo",
             ]:
-                pdf.cell(5)
+                pdf.set_x(pdf.l_margin + 5)
                 pdf.multi_cell(0, 3.5, _safe(f"  * {_item}"))
             pdf.ln(1)
             pdf.set_font("Helvetica", "B", 7.5)
@@ -1928,7 +1928,7 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
                 "Primeiro pedido inflado (-10%) - se o 1o pedido foi 2x maior que os demais (possivel formacao de estoque)",
                 "Sazonalidade (-10%) - se o coeficiente de variacao ultrapassa 60%, indicando compras irregulares",
             ]:
-                pdf.cell(5)
+                pdf.set_x(pdf.l_margin + 5)
                 pdf.multi_cell(0, 3.5, _safe(f"  * {_item}"))
             pdf.ln(1)
             pdf.set_font("Helvetica", "B", 7)
@@ -1960,15 +1960,15 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
         pdf.cell(0, 5, _safe(_leg["nome"]), ln=True)
         pdf.set_font("Helvetica", "I", 7)
         pdf.set_text_color(*_CYAN)
-        pdf.cell(5)
+        pdf.set_x(pdf.l_margin + 5)
         pdf.multi_cell(0, 3.5, _safe(f"Formula: {_leg['formula']}"))
         pdf.set_font("Helvetica", "", 7)
         pdf.set_text_color(*_TEXT)
-        pdf.cell(5)
+        pdf.set_x(pdf.l_margin + 5)
         pdf.multi_cell(0, 3.5, _safe(f"O que e: {_leg['explicacao']}"))
         pdf.set_font("Helvetica", "", 7)
         pdf.set_text_color(*_GREEN)
-        pdf.cell(5)
+        pdf.set_x(pdf.l_margin + 5)
         pdf.multi_cell(0, 3.5, _safe(f"Como interpretar: {_leg['como_interpretar']}"))
         pdf.ln(1.5)
 
@@ -2013,13 +2013,13 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
             pdf.set_font("Helvetica", "", 9)
             pdf.set_text_color(*_TEXT)
             clean = _re.sub(r'\*\*(.*?)\*\*', r'\1', stripped[2:])
-            pdf.cell(5)
+            pdf.set_x(pdf.l_margin + 5)
             pdf.multi_cell(0, 5, _safe(f"  {clean}"))
         elif stripped.startswith("> "):
             pdf.set_font("Helvetica", "I", 8)
             pdf.set_text_color(*_GRAY)
             clean = _re.sub(r'\*\*(.*?)\*\*', r'\1', stripped[2:])
-            pdf.cell(8)
+            pdf.set_x(pdf.l_margin + 8)
             pdf.multi_cell(0, 4.5, _safe(clean))
         elif stripped:
             pdf.set_font("Helvetica", "", 9)
