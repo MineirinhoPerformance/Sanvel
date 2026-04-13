@@ -1542,6 +1542,30 @@ _AI_PRECALC_NOTICE = (
     "Use os valores exatos do JSON.\n"
     "\nPara CADA metrica que voce citar na analise, inclua entre parenteses uma explicacao curta do que ela significa "
     "e como interpretar o valor. Parta do principio que o leitor NAO tem conhecimento de estatistica.\n"
+    "\nREGRA OBRIGATORIA DE COMPARACAO COM A BASE:\n"
+    "Quando comparar o cliente com a base (benchmark), voce DEVE SEMPRE informar o valor exato da base entre parenteses. "
+    "NUNCA diga apenas 'acima da base' ou 'abaixo da base' sem informar qual e o valor da base.\n"
+    "Exemplos CORRETOS:\n"
+    "  - 'Volume 20% acima da media da base (base = 1.500,0 kg)'\n"
+    "  - 'Frequencia 15% abaixo da mediana da base (base = 12,0 pedidos)'\n"
+    "  - 'Recorrencia superior a media da base (base = 65,0%)'\n"
+    "Exemplos INCORRETOS (NUNCA faca assim):\n"
+    "  - 'Volume 20% acima da base' (ERRADO - nao informou o valor da base)\n"
+    "  - 'Frequencia abaixo da media' (ERRADO - nao informou o valor da base)\n"
+    "Os valores da base estao disponiveis no JSON nos campos com sufixo '_base' (ex: kg_media_base, kg_mediana_base, etc).\n"
+    "\nREGRA OBRIGATORIA DE CONCENTRACAO:\n"
+    "Quando mencionar 'alta concentracao' de pedidos, volume ou qualquer metrica, voce DEVE explicar:\n"
+    "  1. O que e considerado 'alta concentracao' (o limiar/threshold usado)\n"
+    "  2. O valor exato do cliente ou item sendo analisado\n"
+    "  3. Com o que esta sendo comparado\n"
+    "Limiares de referencia:\n"
+    "  - HHI (Indice Herfindahl-Hirschman): acima de 25 = alta concentracao, acima de 50 = concentracao critica\n"
+    "  - Concentracao Top 1: um unico cliente/produto com mais de 30% do volume total = alta concentracao, acima de 50% = risco critico\n"
+    "  - Participacao individual: qualquer cliente/produto com mais de 20% do volume total merece destaque por representar risco de dependencia\n"
+    "Exemplo CORRETO:\n"
+    "  - 'POSTO TUIUTI LTDA tem alta concentracao com 22,7% do volume total (acima do limiar de 20%, o que indica risco de dependencia caso esse cliente reduza suas compras)'\n"
+    "Exemplo INCORRETO (NUNCA faca assim):\n"
+    "  - 'POSTO TUIUTI LTDA tem alta concentracao de pedidos' (ERRADO - nao explicou o que e 'alta concentracao' nem o limiar)\n"
 )
 
 # ── Legendas detalhadas de metricas (exibidas no modal e no PDF) ─────────────
@@ -1830,13 +1854,13 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
             self.rect(0, 0, 210, 297, 'F')
             self.set_font("Helvetica", "B", 14)
             self.set_text_color(*_CYAN)
-            self.cell(0, 8, _safe("RELATORIO DE INTELIGENCIA COMERCIAL"), new_x="LMARGIN", new_y="NEXT", align="C")
+            self.cell(0, 8, _safe("RELATORIO DE INTELIGENCIA COMERCIAL"), ln=1, align="C")
             self.set_font("Helvetica", "B", 11)
             self.set_text_color(*_WHITE)
-            self.cell(0, 7, _safe(chart_name), new_x="LMARGIN", new_y="NEXT", align="C")
+            self.cell(0, 7, _safe(chart_name), ln=1, align="C")
             self.set_font("Helvetica", "", 7.5)
             self.set_text_color(*_GRAY)
-            self.cell(0, 5, _safe(f"Periodo: {str(date_from)} a {str(date_to)}"), new_x="LMARGIN", new_y="NEXT", align="C")
+            self.cell(0, 5, _safe(f"Periodo: {str(date_from)} a {str(date_to)}"), ln=1, align="C")
             self.ln(2)
             self.set_draw_color(*_CYAN)
             self.set_line_width(0.4)
@@ -1848,7 +1872,7 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
             self.set_y(-12)
             self.set_font("Helvetica", "I", 6)
             self.set_text_color(*_GRAY)
-            self.cell(0, 4, _safe(f"Pagina {self.page_no()}"), new_x="LMARGIN", new_y="NEXT", align="C")
+            self.cell(0, 4, _safe(f"Pagina {self.page_no()}"), ln=1, align="C")
 
     pdf = _AnalysisPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -1866,12 +1890,12 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
         pdf.set_xy(15, y_start + 2)
         pdf.set_font("Helvetica", "B", 7)
         pdf.set_text_color(*_GRAY)
-        pdf.cell(0, 4, _safe(f"CLIENTES ANALISADOS ({len(clientes_list)})"), new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 4, _safe(f"CLIENTES ANALISADOS ({len(clientes_list)})"), ln=1)
         for _cli in clientes_list:
             pdf.set_font("Helvetica", "", 8)
             pdf.set_text_color(*_WHITE)
             pdf.set_x(17)
-            pdf.cell(0, 5, _safe(_cli), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 5, _safe(_cli), ln=1)
         pdf.set_y(y_start + block_h + 3)
 
     # ── 2) Score cards de viabilidade por cliente ────────────────────────────
@@ -1892,14 +1916,15 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
             pdf.set_xy(x0 + 5, y0 + 3)
             pdf.set_font("Helvetica", "B", 16)
             pdf.set_text_color(r, g, b)
-            pdf.cell(28, 8, _safe(f"{score}/100"), new_x="RIGHT", new_y="TOP")
+            _x_after_score = pdf.get_x()
+            pdf.cell(28, 8, _safe(f"{score}/100"))
             # Label
             pdf.set_font("Helvetica", "B", 9)
-            pdf.cell(55, 8, _safe(label), new_x="RIGHT", new_y="TOP")
+            pdf.cell(55, 8, _safe(label))
             # Cliente
             pdf.set_font("Helvetica", "", 8)
             pdf.set_text_color(*_WHITE)
-            pdf.cell(0, 8, _safe(cli_name), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 8, _safe(cli_name), ln=1)
             # Descritivo da classificacao
             if _cls_desc:
                 pdf.set_xy(x0 + 5, y0 + 13)
@@ -1917,7 +1942,7 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
             pdf.set_xy(12, pdf.get_y() + 1)
             pdf.set_font("Helvetica", "B", 8)
             pdf.set_text_color(*_CYAN)
-            pdf.cell(0, 3.5, _safe("METODOLOGIA DO SCORE DE VIABILIDADE"), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 3.5, _safe("METODOLOGIA DO SCORE DE VIABILIDADE"), ln=1)
             pdf.ln(2)
             pdf.set_font("Helvetica", "", 7)
             pdf.set_text_color(*_TEXT)
@@ -1927,7 +1952,7 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
             pdf.ln(1)
             pdf.set_font("Helvetica", "B", 7)
             pdf.set_text_color(*_GREEN)
-            pdf.cell(0, 4, _safe("Fatores positivos (somam pontos):"), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 4, _safe("Fatores positivos (somam pontos):"), ln=1)
             pdf.set_font("Helvetica", "", 6.5)
             pdf.set_text_color(*_TEXT)
             for _item in [
@@ -1942,7 +1967,7 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
             pdf.ln(1)
             pdf.set_font("Helvetica", "B", 7)
             pdf.set_text_color(*_RED)
-            pdf.cell(0, 4, _safe("Penalidades (reduzem pontos):"), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 4, _safe("Penalidades (reduzem pontos):"), ln=1)
             pdf.set_font("Helvetica", "", 6.5)
             pdf.set_text_color(*_TEXT)
             for _item in [
@@ -1956,7 +1981,7 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
             # Classificacoes com descritivos
             pdf.set_font("Helvetica", "B", 7)
             pdf.set_text_color(*_WHITE)
-            pdf.cell(0, 4, _safe("Classificacoes:"), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 4, _safe("Classificacoes:"), ln=1)
             for _cls_name, _cls_rgb, _score_range in [
                 ("Estrategico", _GREEN, "80-100"),
                 ("Relevante", _CYAN, "60-79"),
@@ -1968,7 +1993,7 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
                 pdf.set_font("Helvetica", "B", 6.5)
                 pdf.set_text_color(*_cls_rgb)
                 pdf.set_x(pdf.l_margin + 5)
-                pdf.cell(50, 3, _safe(f"{_score_range} = {_cls_name}"), new_x="RIGHT", new_y="TOP")
+                pdf.cell(50, 3, _safe(f"{_score_range} = {_cls_name}"))
                 pdf.set_font("Helvetica", "", 6)
                 pdf.set_text_color(*_GRAY)
                 pdf.multi_cell(0, 3, _safe(f"- {_desc}"))
@@ -1987,7 +2012,7 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
     pdf.set_xy(12, pdf.get_y() + 1)
     pdf.set_font("Helvetica", "B", 8)
     pdf.set_text_color(*_CYAN)
-    pdf.cell(0, 3.5, _safe("GLOSSARIO DE METRICAS UTILIZADAS"), new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 3.5, _safe("GLOSSARIO DE METRICAS UTILIZADAS"), ln=1)
     pdf.ln(2)
     pdf.set_font("Helvetica", "", 6.5)
     pdf.set_text_color(*_GRAY)
@@ -1999,7 +2024,7 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
     for _leg in _METRIC_LEGENDS:
         pdf.set_font("Helvetica", "B", 7.5)
         pdf.set_text_color(*_WHITE)
-        pdf.cell(0, 4.5, _safe(_leg["nome"]), new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 4.5, _safe(_leg["nome"]), ln=1)
         pdf.set_font("Helvetica", "I", 6.5)
         pdf.set_text_color(*_CYAN)
         pdf.set_x(pdf.l_margin + 4)
@@ -2027,7 +2052,7 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
     pdf.set_xy(12, pdf.get_y() + 1)
     pdf.set_font("Helvetica", "B", 8)
     pdf.set_text_color(*_CYAN)
-    pdf.cell(0, 3.5, _safe("ANALISE DE INTELIGENCIA ARTIFICIAL"), new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 3.5, _safe("ANALISE DE INTELIGENCIA ARTIFICIAL"), ln=1)
     pdf.ln(2)
 
     lines = analysis_md.split("\n") if analysis_md else []
@@ -2037,26 +2062,26 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
             pdf.ln(2)
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(*_CYAN)
-            pdf.cell(0, 5, _safe(stripped[5:]), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 5, _safe(stripped[5:]), ln=1)
         elif stripped.startswith("### "):
             pdf.ln(3)
             pdf.set_font("Helvetica", "B", 10)
             pdf.set_text_color(*_CYAN)
-            pdf.cell(0, 6, _safe(stripped[4:]), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 6, _safe(stripped[4:]), ln=1)
         elif stripped.startswith("## "):
             pdf.ln(3)
             pdf.set_font("Helvetica", "B", 12)
             pdf.set_text_color(*_CYAN)
-            pdf.cell(0, 7, _safe(stripped[3:]), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 7, _safe(stripped[3:]), ln=1)
         elif stripped.startswith("# "):
             pdf.ln(3)
             pdf.set_font("Helvetica", "B", 13)
             pdf.set_text_color(*_CYAN)
-            pdf.cell(0, 8, _safe(stripped[2:]), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 8, _safe(stripped[2:]), ln=1)
         elif stripped.startswith("**") and stripped.endswith("**"):
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(*_WHITE)
-            pdf.cell(0, 5, _safe(stripped.replace("**", "")), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 5, _safe(stripped.replace("**", "")), ln=1)
         elif stripped.startswith("- ") or stripped.startswith("* "):
             pdf.set_font("Helvetica", "", 8.5)
             pdf.set_text_color(*_TEXT)
@@ -2206,7 +2231,10 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
                     st.markdown(
                         f"<div style='background:{BG_CARD};border:1px solid {BORDER};"
                         f"border-top:3px solid {_col};border-radius:10px;padding:14px 16px;"
-                        f"margin-bottom:10px'>"
+                        f"margin-bottom:10px;min-height:260px;max-height:260px;"
+                        f"display:flex;flex-direction:column;justify-content:space-between;"
+                        f"overflow:hidden;box-sizing:border-box'>"
+                        f"<div>"
                         f"<div style='font-size:.62rem;color:{TXT_S};font-weight:700;"
                         f"letter-spacing:.08em;margin-bottom:6px;text-transform:uppercase'>SCORE DE VIABILIDADE</div>"
                         f"<div style='font-size:2rem;font-weight:800;color:{_col};"
@@ -2218,8 +2246,10 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
                         f"border-radius:4px'></div></div>"
                         f"<div style='font-size:.75rem;font-weight:700;color:{_col};margin-bottom:2px'>{_lbl}</div>"
                         f"<div style='font-size:.65rem;color:{TXT_S};line-height:1.4;"
-                        f"margin-bottom:4px;font-style:italic'>{_cls_desc}</div>"
+                        f"margin-bottom:4px;font-style:italic;overflow:hidden;"
+                        f"display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical'>{_cls_desc}</div>"
                         f"<div style='font-size:.68rem;color:{TXT_S};margin-top:3px'>{_cls}</div>"
+                        f"</div>"
                         f"<div style='font-size:.72rem;color:{TXT_H};margin-top:4px;"
                         f"font-weight:600;border-top:1px solid {BORDER};padding-top:6px'>{_cn}</div>"
                         f"</div>",
