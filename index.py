@@ -1171,10 +1171,31 @@ def _calc_viability_score(freq_s, rec_s, vol_s, avg_vol_s, trend_s,
     return max(0, min(100, round(raw)))
 
 def _score_label(score):
-    if score >= 80: return "Cliente estrategico",  C_GREEN
-    if score >= 60: return "Cliente relevante",    C_CYAN
-    if score >= 40: return "Cliente oportunista",  C_AMBER
-    return "Cliente de baixo valor", C_RED
+    if score >= 80: return "Cliente Estrategico",  C_GREEN
+    if score >= 60: return "Cliente Relevante",    C_CYAN
+    if score >= 40: return "Cliente Oportunista",  C_AMBER
+    return "Cliente de Baixo Valor", C_RED
+
+# Descritivos das classificacoes para leigos
+_SCORE_CLASS_DESC = {
+    "Cliente Estrategico": (
+        "Compra com alta frequencia, volume consistente e tendencia de crescimento. "
+        "E um cliente essencial para o faturamento e merece atencao prioritaria."
+    ),
+    "Cliente Relevante": (
+        "Apresenta bom volume e regularidade, mas ainda nao atingiu o patamar estrategico. "
+        "Com acompanhamento adequado, pode evoluir para estrategico."
+    ),
+    "Cliente Oportunista": (
+        "Compra de forma irregular ou esporadica, sem padrao claro de recorrencia. "
+        "Pode representar compras pontuais, promocionais ou de conveniencia. "
+        "Requer acao comercial para fidelizacao."
+    ),
+    "Cliente de Baixo Valor": (
+        "Volume e frequencia muito baixos, ou com sinais de queda acentuada. "
+        "Pode ser um cliente em fase de abandono ou que comprou apenas por necessidade pontual."
+    ),
+}
 
 
 # ── Benchmark da base ─────────────────────────────────────────────────────────
@@ -1295,8 +1316,12 @@ def build_ai_context(analysis_type, chart_name, df_f, df_b, df_r, periodo=None, 
             conc1 = _ai_conc_top1(kg_ped_s) if kg_ped_s else 0.0
             hhi   = _ai_conc_hhi(kg_ped_s)  if kg_ped_s else 0.0
 
-            n_sem_t  = len(kg_s)
-            n_sem_a  = int(sum(1 for x in kg_s if x > 0))
+            # Taxa de recorrencia: semanas ativas / total de semanas no periodo
+            # Usa ALL_RANGE_SORTS para considerar TODAS as semanas do periodo,
+            # incluindo semanas sem faturamento (que indicam inatividade)
+            n_sem_t  = len(ALL_RANGE_SORTS) if ALL_RANGE_SORTS else len(kg_s)
+            _cli_weeks_active = set(wk_c["semana_sort"].tolist())
+            n_sem_a  = len(_cli_weeks_active)
             rec_pct  = round(n_sem_a / n_sem_t * 100, 1) if n_sem_t else 0.0
             cv_kg    = _ai_cv(kg_s)
             saz_flag = cv_kg > 60
@@ -1762,7 +1787,7 @@ _CHART_SPECIFIC_INSTRUCTIONS = {
 
 def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
                    clientes_list=None, score_explanation=True):
-    """Gera PDF da analise IDENTICO ao modal — inclui clientes, scores, legendas, analise e disclaimer."""
+    """Gera PDF profissional da analise — identico ao modal, com disclaimer discreto apenas no final."""
     from fpdf import FPDF
     import re as _re
     import tempfile as _tmp
@@ -1803,183 +1828,206 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
         def header(self):
             self.set_fill_color(*_BG)
             self.rect(0, 0, 210, 297, 'F')
-            self.set_font("Helvetica", "B", 16)
+            self.set_font("Helvetica", "B", 14)
             self.set_text_color(*_CYAN)
-            self.cell(0, 10, _safe("INTELIGENCIA COMERCIAL"), ln=True, align="C")
-            self.set_font("Helvetica", "B", 12)
+            self.cell(0, 8, _safe("RELATORIO DE INTELIGENCIA COMERCIAL"), new_x="LMARGIN", new_y="NEXT", align="C")
+            self.set_font("Helvetica", "B", 11)
             self.set_text_color(*_WHITE)
-            self.cell(0, 8, _safe(chart_name), ln=True, align="C")
-            self.set_font("Helvetica", "", 8)
+            self.cell(0, 7, _safe(chart_name), new_x="LMARGIN", new_y="NEXT", align="C")
+            self.set_font("Helvetica", "", 7.5)
             self.set_text_color(*_GRAY)
-            self.cell(0, 6, _safe(f"Analise baseada nos dados filtrados atualmente no dashboard"), ln=True, align="C")
-            self.cell(0, 5, _safe(f"Periodo: {str(date_from)} a {str(date_to)}"), ln=True, align="C")
-            self.ln(3)
-            self.set_draw_color(*_BORDER)
+            self.cell(0, 5, _safe(f"Periodo: {str(date_from)} a {str(date_to)}"), new_x="LMARGIN", new_y="NEXT", align="C")
+            self.ln(2)
+            self.set_draw_color(*_CYAN)
+            self.set_line_width(0.4)
             self.line(10, self.get_y(), 200, self.get_y())
+            self.set_line_width(0.2)
             self.ln(3)
 
         def footer(self):
-            self.set_y(-30)
-            self.set_draw_color(*_BORDER)
-            self.line(10, self.get_y(), 200, self.get_y())
-            self.ln(3)
-            self.set_fill_color(25, 20, 5)
-            self.rect(10, self.get_y(), 190, 18, 'F')
-            self.set_draw_color(*_AMBER)
-            self.rect(10, self.get_y(), 190, 18, 'D')
-            y0 = self.get_y() + 2
-            self.set_xy(14, y0)
-            self.set_font("Helvetica", "B", 7)
-            self.set_text_color(*_AMBER)
-            self.cell(0, 4, _safe("AVISO IMPORTANTE"), ln=True)
-            self.set_x(14)
-            self.set_font("Helvetica", "", 6.5)
-            self.set_text_color(*_GRAY)
-            self.multi_cell(182, 3.5, _safe(
-                "Toda Inteligencia Artificial pode cometer erros. Os dados e conclusoes apresentados "
-                "devem ser revisados criticamente antes de serem utilizados para tomada de decisao. "
-                "Valide as informacoes com os dados originais sempre que possivel."
-            ))
+            self.set_y(-12)
             self.set_font("Helvetica", "I", 6)
             self.set_text_color(*_GRAY)
-            self.cell(0, 4, _safe(f"GPT-4o-mini  |  Pagina {self.page_no()}"), ln=True, align="C")
+            self.cell(0, 4, _safe(f"Pagina {self.page_no()}"), new_x="LMARGIN", new_y="NEXT", align="C")
 
     pdf = _AnalysisPDF()
-    pdf.set_auto_page_break(auto=True, margin=35)
+    pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # ── 1) Bloco de clientes analisados (identico ao modal) ──────────────────
+    # ── 1) Bloco de clientes analisados ──────────────────────────────────────
     if clientes_list:
         pdf.set_fill_color(*_CARD_BG)
         pdf.set_draw_color(*_CYAN)
-        x0, y0 = 10, pdf.get_y()
-        # Renderizar cada cliente em linha separada
-        pdf.set_font("Helvetica", "B", 8)
+        y_start = pdf.get_y()
+        block_h = 6 + len(clientes_list) * 5 + 2
+        pdf.rect(10, y_start, 190, block_h, 'FD')
+        pdf.set_fill_color(*_CYAN)
+        pdf.rect(10, y_start, 2, block_h, 'F')
+        pdf.set_xy(15, y_start + 2)
+        pdf.set_font("Helvetica", "B", 7)
         pdf.set_text_color(*_GRAY)
-        pdf.cell(0, 5, _safe(f"CLIENTES ANALISADOS ({len(clientes_list)})"), ln=True)
+        pdf.cell(0, 4, _safe(f"CLIENTES ANALISADOS ({len(clientes_list)})"), new_x="LMARGIN", new_y="NEXT")
         for _cli in clientes_list:
             pdf.set_font("Helvetica", "", 8)
             pdf.set_text_color(*_WHITE)
-            pdf.cell(3)
-            pdf.cell(0, 5, _safe(f"  {_cli}"), ln=True)
-        pdf.ln(4)
+            pdf.set_x(17)
+            pdf.cell(0, 5, _safe(_cli), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_y(y_start + block_h + 3)
 
     # ── 2) Score cards de viabilidade por cliente ────────────────────────────
     if scores_info:
         for cli_name, score, label, color_hex in scores_info:
             r, g, b = int(color_hex[1:3], 16), int(color_hex[3:5], 16), int(color_hex[5:7], 16)
+            # Descritivo da classificacao
+            _cls_desc = _SCORE_CLASS_DESC.get(label, "")
+            # Card com borda colorida no topo
             pdf.set_draw_color(r, g, b)
             pdf.set_fill_color(*_CARD_BG)
-            x0 = 10
-            y0 = pdf.get_y()
-            pdf.rect(x0, y0, 190, 18, 'FD')
-            # Linha colorida no topo do card
+            x0, y0 = 10, pdf.get_y()
+            card_h = 22 if not _cls_desc else 28
+            pdf.rect(x0, y0, 190, card_h, 'FD')
             pdf.set_fill_color(r, g, b)
             pdf.rect(x0, y0, 190, 1.5, 'F')
-            # Score grande
+            # Score
             pdf.set_xy(x0 + 5, y0 + 3)
-            pdf.set_font("Helvetica", "B", 14)
+            pdf.set_font("Helvetica", "B", 16)
             pdf.set_text_color(r, g, b)
-            pdf.cell(25, 7, _safe(f"{score}/100"), ln=False)
-            # Label e cliente
+            pdf.cell(28, 8, _safe(f"{score}/100"), new_x="RIGHT", new_y="TOP")
+            # Label
             pdf.set_font("Helvetica", "B", 9)
-            pdf.set_text_color(r, g, b)
-            pdf.cell(60, 7, _safe(f"  {label}"), ln=False)
+            pdf.cell(55, 8, _safe(label), new_x="RIGHT", new_y="TOP")
+            # Cliente
             pdf.set_font("Helvetica", "", 8)
             pdf.set_text_color(*_WHITE)
-            pdf.cell(0, 7, _safe(f"  {cli_name}"), ln=True)
-            pdf.set_y(y0 + 20)
-        pdf.ln(2)
+            pdf.cell(0, 8, _safe(cli_name), new_x="LMARGIN", new_y="NEXT")
+            # Descritivo da classificacao
+            if _cls_desc:
+                pdf.set_xy(x0 + 5, y0 + 13)
+                pdf.set_font("Helvetica", "I", 6.5)
+                pdf.set_text_color(*_GRAY)
+                pdf.multi_cell(180, 3, _safe(_cls_desc))
+            pdf.set_y(y0 + card_h + 3)
+        pdf.ln(1)
 
         # ── 3) Explicacao de como o score e calculado ────────────────────────
         if score_explanation:
-            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_draw_color(*_BORDER)
+            pdf.set_fill_color(*_CARD_BG)
+            pdf.rect(10, pdf.get_y(), 190, 5, 'FD')
+            pdf.set_xy(12, pdf.get_y() + 1)
+            pdf.set_font("Helvetica", "B", 8)
             pdf.set_text_color(*_CYAN)
-            pdf.cell(0, 6, _safe("Como o Score de Viabilidade e calculado?"), ln=True)
-            pdf.set_font("Helvetica", "", 7.5)
+            pdf.cell(0, 3.5, _safe("METODOLOGIA DO SCORE DE VIABILIDADE"), new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(2)
+            pdf.set_font("Helvetica", "", 7)
             pdf.set_text_color(*_TEXT)
-            pdf.multi_cell(0, 4, _safe(
-                "O Score de Viabilidade e um indice de 0 a 100 calculado automaticamente pelo sistema "
-                "com base em 8 fatores ponderados:"
+            pdf.multi_cell(0, 3.5, _safe(
+                "Indice de 0 a 100 calculado automaticamente com base em 8 fatores ponderados:"
             ))
-            pdf.ln(1)
-            pdf.set_font("Helvetica", "B", 7.5)
-            pdf.set_text_color(*_GREEN)
-            pdf.cell(0, 4, _safe("Fatores positivos:"), ln=True)
-            pdf.set_font("Helvetica", "", 7)
-            pdf.set_text_color(*_TEXT)
-            for _item in [
-                "Frequencia de compra (25%) - quanto menor o intervalo entre pedidos, maior a pontuacao",
-                "Recorrencia (20%) - percentual de semanas em que o cliente esteve ativo",
-                "Volume total (15%) - volume em kg comparado com a media da base",
-                "Volume medio por pedido (10%) - consistencia no tamanho das compras",
-                "Tendencia (10%) - se o volume esta crescendo, estavel ou caindo",
-            ]:
-                pdf.set_x(pdf.l_margin + 5)
-                pdf.multi_cell(0, 3.5, _safe(f"  * {_item}"))
-            pdf.ln(1)
-            pdf.set_font("Helvetica", "B", 7.5)
-            pdf.set_text_color(*_RED)
-            pdf.cell(0, 4, _safe("Penalidades (reduzem o score):"), ln=True)
-            pdf.set_font("Helvetica", "", 7)
-            pdf.set_text_color(*_TEXT)
-            for _item in [
-                "Concentracao (-10%) - se mais de 50% do volume esta em um unico pedido",
-                "Primeiro pedido inflado (-10%) - se o 1o pedido foi 2x maior que os demais (possivel formacao de estoque)",
-                "Sazonalidade (-10%) - se o coeficiente de variacao ultrapassa 60%, indicando compras irregulares",
-            ]:
-                pdf.set_x(pdf.l_margin + 5)
-                pdf.multi_cell(0, 3.5, _safe(f"  * {_item}"))
             pdf.ln(1)
             pdf.set_font("Helvetica", "B", 7)
+            pdf.set_text_color(*_GREEN)
+            pdf.cell(0, 4, _safe("Fatores positivos (somam pontos):"), new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", "", 6.5)
+            pdf.set_text_color(*_TEXT)
+            for _item in [
+                "Frequencia de compra (25%) - intervalo entre pedidos",
+                "Recorrencia (20%) - % de semanas ativas no periodo",
+                "Volume total (15%) - kg vs media da base",
+                "Volume medio/pedido (10%) - consistencia",
+                "Tendencia (10%) - crescimento ou queda",
+            ]:
+                pdf.set_x(pdf.l_margin + 5)
+                pdf.multi_cell(0, 3, _safe(f"  * {_item}"))
+            pdf.ln(1)
+            pdf.set_font("Helvetica", "B", 7)
+            pdf.set_text_color(*_RED)
+            pdf.cell(0, 4, _safe("Penalidades (reduzem pontos):"), new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", "", 6.5)
+            pdf.set_text_color(*_TEXT)
+            for _item in [
+                "Concentracao (-10%) - volume em um unico pedido",
+                "1o pedido inflado (-10%) - 2x maior que os demais",
+                "Sazonalidade (-10%) - CV > 60%, compras irregulares",
+            ]:
+                pdf.set_x(pdf.l_margin + 5)
+                pdf.multi_cell(0, 3, _safe(f"  * {_item}"))
+            pdf.ln(1)
+            # Classificacoes com descritivos
+            pdf.set_font("Helvetica", "B", 7)
             pdf.set_text_color(*_WHITE)
-            pdf.multi_cell(0, 3.5, _safe(
-                "Classificacao: 80-100 = Estrategico | 60-79 = Relevante | 40-59 = Oportunista | 0-39 = Baixo valor"
-            ))
-            pdf.ln(3)
+            pdf.cell(0, 4, _safe("Classificacoes:"), new_x="LMARGIN", new_y="NEXT")
+            for _cls_name, _cls_rgb, _score_range in [
+                ("Estrategico", _GREEN, "80-100"),
+                ("Relevante", _CYAN, "60-79"),
+                ("Oportunista", _AMBER, "40-59"),
+                ("Baixo valor", _RED, "0-39"),
+            ]:
+                _full_name = f"Cliente {_cls_name}"
+                _desc = _SCORE_CLASS_DESC.get(_full_name, "")
+                pdf.set_font("Helvetica", "B", 6.5)
+                pdf.set_text_color(*_cls_rgb)
+                pdf.set_x(pdf.l_margin + 5)
+                pdf.cell(50, 3, _safe(f"{_score_range} = {_cls_name}"), new_x="RIGHT", new_y="TOP")
+                pdf.set_font("Helvetica", "", 6)
+                pdf.set_text_color(*_GRAY)
+                pdf.multi_cell(0, 3, _safe(f"- {_desc}"))
+            pdf.ln(2)
 
-        pdf.set_draw_color(*_BORDER)
+        pdf.set_draw_color(*_CYAN)
+        pdf.set_line_width(0.3)
         pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.set_line_width(0.2)
         pdf.ln(3)
 
-    # ── 4) Glossario de metricas (identico ao modal) ─────────────────────────
-    pdf.set_font("Helvetica", "B", 10)
+    # ── 4) Glossario de metricas ─────────────────────────────────────────────
+    pdf.set_fill_color(*_CARD_BG)
+    pdf.set_draw_color(*_BORDER)
+    pdf.rect(10, pdf.get_y(), 190, 5, 'FD')
+    pdf.set_xy(12, pdf.get_y() + 1)
+    pdf.set_font("Helvetica", "B", 8)
     pdf.set_text_color(*_CYAN)
-    pdf.cell(0, 7, _safe("Glossario de Metricas Utilizadas"), ln=True)
-    pdf.set_font("Helvetica", "", 7)
-    pdf.set_text_color(*_GRAY)
-    pdf.multi_cell(0, 3.5, _safe(
-        "Abaixo estao explicadas todas as metricas utilizadas nesta analise, "
-        "com formulas e orientacoes de interpretacao para facilitar a leitura."
-    ))
+    pdf.cell(0, 3.5, _safe("GLOSSARIO DE METRICAS UTILIZADAS"), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
+    pdf.set_font("Helvetica", "", 6.5)
+    pdf.set_text_color(*_GRAY)
+    pdf.multi_cell(0, 3, _safe(
+        "Explicacao de todas as metricas utilizadas nesta analise."
+    ))
+    pdf.ln(1)
 
     for _leg in _METRIC_LEGENDS:
-        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_font("Helvetica", "B", 7.5)
         pdf.set_text_color(*_WHITE)
-        pdf.cell(0, 5, _safe(_leg["nome"]), ln=True)
-        pdf.set_font("Helvetica", "I", 7)
+        pdf.cell(0, 4.5, _safe(_leg["nome"]), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "I", 6.5)
         pdf.set_text_color(*_CYAN)
-        pdf.set_x(pdf.l_margin + 5)
-        pdf.multi_cell(0, 3.5, _safe(f"Formula: {_leg['formula']}"))
-        pdf.set_font("Helvetica", "", 7)
+        pdf.set_x(pdf.l_margin + 4)
+        pdf.multi_cell(0, 3, _safe(f"Formula: {_leg['formula']}"))
+        pdf.set_font("Helvetica", "", 6.5)
         pdf.set_text_color(*_TEXT)
-        pdf.set_x(pdf.l_margin + 5)
-        pdf.multi_cell(0, 3.5, _safe(f"O que e: {_leg['explicacao']}"))
-        pdf.set_font("Helvetica", "", 7)
+        pdf.set_x(pdf.l_margin + 4)
+        pdf.multi_cell(0, 3, _safe(f"O que e: {_leg['explicacao']}"))
+        pdf.set_font("Helvetica", "", 6.5)
         pdf.set_text_color(*_GREEN)
-        pdf.set_x(pdf.l_margin + 5)
-        pdf.multi_cell(0, 3.5, _safe(f"Como interpretar: {_leg['como_interpretar']}"))
-        pdf.ln(1.5)
+        pdf.set_x(pdf.l_margin + 4)
+        pdf.multi_cell(0, 3, _safe(f"Interpretacao: {_leg['como_interpretar']}"))
+        pdf.ln(1)
 
-    pdf.set_draw_color(*_BORDER)
+    pdf.set_draw_color(*_CYAN)
+    pdf.set_line_width(0.3)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-    pdf.ln(4)
+    pdf.set_line_width(0.2)
+    pdf.ln(3)
 
     # ── 5) Analise da IA (conteudo markdown) ─────────────────────────────────
-    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_fill_color(*_CARD_BG)
+    pdf.set_draw_color(*_BORDER)
+    pdf.rect(10, pdf.get_y(), 190, 5, 'FD')
+    pdf.set_xy(12, pdf.get_y() + 1)
+    pdf.set_font("Helvetica", "B", 8)
     pdf.set_text_color(*_CYAN)
-    pdf.cell(0, 7, _safe("Analise de Inteligencia Artificial"), ln=True)
+    pdf.cell(0, 3.5, _safe("ANALISE DE INTELIGENCIA ARTIFICIAL"), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
 
     lines = analysis_md.split("\n") if analysis_md else []
@@ -1989,43 +2037,55 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
             pdf.ln(2)
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(*_CYAN)
-            pdf.cell(0, 6, _safe(stripped[5:]), ln=True)
+            pdf.cell(0, 5, _safe(stripped[5:]), new_x="LMARGIN", new_y="NEXT")
         elif stripped.startswith("### "):
             pdf.ln(3)
-            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_font("Helvetica", "B", 10)
             pdf.set_text_color(*_CYAN)
-            pdf.cell(0, 7, _safe(stripped[4:]), ln=True)
+            pdf.cell(0, 6, _safe(stripped[4:]), new_x="LMARGIN", new_y="NEXT")
         elif stripped.startswith("## "):
+            pdf.ln(3)
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.set_text_color(*_CYAN)
+            pdf.cell(0, 7, _safe(stripped[3:]), new_x="LMARGIN", new_y="NEXT")
+        elif stripped.startswith("# "):
             pdf.ln(3)
             pdf.set_font("Helvetica", "B", 13)
             pdf.set_text_color(*_CYAN)
-            pdf.cell(0, 8, _safe(stripped[3:]), ln=True)
-        elif stripped.startswith("# "):
-            pdf.ln(3)
-            pdf.set_font("Helvetica", "B", 14)
-            pdf.set_text_color(*_CYAN)
-            pdf.cell(0, 9, _safe(stripped[2:]), ln=True)
+            pdf.cell(0, 8, _safe(stripped[2:]), new_x="LMARGIN", new_y="NEXT")
         elif stripped.startswith("**") and stripped.endswith("**"):
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(*_WHITE)
-            pdf.cell(0, 5, _safe(stripped.replace("**", "")), ln=True)
+            pdf.cell(0, 5, _safe(stripped.replace("**", "")), new_x="LMARGIN", new_y="NEXT")
         elif stripped.startswith("- ") or stripped.startswith("* "):
-            pdf.set_font("Helvetica", "", 9)
+            pdf.set_font("Helvetica", "", 8.5)
             pdf.set_text_color(*_TEXT)
             clean = _re.sub(r'\*\*(.*?)\*\*', r'\1', stripped[2:])
             pdf.set_x(pdf.l_margin + 5)
-            pdf.multi_cell(0, 5, _safe(f"  {clean}"))
+            pdf.multi_cell(0, 4.5, _safe(f"  {clean}"))
         elif stripped.startswith("> "):
             pdf.set_font("Helvetica", "I", 8)
             pdf.set_text_color(*_GRAY)
             clean = _re.sub(r'\*\*(.*?)\*\*', r'\1', stripped[2:])
             pdf.set_x(pdf.l_margin + 8)
-            pdf.multi_cell(0, 4.5, _safe(clean))
+            pdf.multi_cell(0, 4, _safe(clean))
         elif stripped:
-            pdf.set_font("Helvetica", "", 9)
+            pdf.set_font("Helvetica", "", 8.5)
             pdf.set_text_color(*_TEXT)
             clean = _re.sub(r'\*\*(.*?)\*\*', r'\1', stripped)
-            pdf.multi_cell(0, 5, _safe(clean))
+            pdf.multi_cell(0, 4.5, _safe(clean))
+
+    # ── 6) Disclaimer discreto — aparece apenas uma vez no final ─────────────
+    pdf.ln(6)
+    pdf.set_draw_color(*_BORDER)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "I", 6)
+    pdf.set_text_color(*_GRAY)
+    pdf.multi_cell(0, 3, _safe(
+        "Nota: Toda Inteligencia Artificial pode cometer erros. "
+        "Revise criticamente antes de utilizar para tomada de decisao."
+    ), align="C")
 
     fp = _tmp.NamedTemporaryFile(delete=False, suffix=".pdf")
     pdf.output(fp.name)
@@ -2065,15 +2125,17 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
         return
     _oa.api_key = _api_key
 
-    # ── Cabecalho ─────────────────────────────────────────────────────────────
+    # ── Cabecalho profissional ──────────────────────────────────────────────
     st.markdown(
-        f"<div style='font-size:.72rem;font-weight:700;color:{C_CYAN};"
-        f"letter-spacing:.09em;margin-bottom:2px'>INTELIGENCIA COMERCIAL</div>"
-        f"<div style='font-size:1rem;color:{TXT_H};font-weight:700;"
-        f"margin-bottom:2px'>{chart_name}</div>"
-        f"<div style='font-size:.75rem;color:{TXT_S};margin-bottom:14px'>"
-        f"Analise baseada nos dados filtrados atualmente no dashboard &nbsp;&middot;&nbsp; "
-        f"Periodo: {str(date_from)} a {str(date_to)}</div>",
+        f"<div style='text-align:center;padding:10px 0 8px;margin-bottom:8px;"
+        f"border-bottom:2px solid {C_CYAN}'>"
+        f"<div style='font-size:.65rem;font-weight:700;color:{C_CYAN};"
+        f"letter-spacing:.12em;margin-bottom:4px'>RELATORIO DE INTELIGENCIA COMERCIAL</div>"
+        f"<div style='font-size:1.05rem;color:{TXT_H};font-weight:700;"
+        f"margin-bottom:4px'>{chart_name}</div>"
+        f"<div style='font-size:.70rem;color:{TXT_S}'>"
+        f"Periodo: {str(date_from)} a {str(date_to)}</div>"
+        f"</div>",
         unsafe_allow_html=True,
     )
 
@@ -2143,51 +2205,70 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
             for _ci, (_cn, _sc, _lbl, _col, _cls) in enumerate(_chunk):
                 with _scols[_ci]:
                     _bar_w = int(_sc)
+                    # Busca descritivo da classificacao
+                    _cls_desc = _SCORE_CLASS_DESC.get(_lbl, "")
                     st.markdown(
                         f"<div style='background:{BG_CARD};border:1px solid {BORDER};"
-                        f"border-top:3px solid {_col};border-radius:10px;padding:12px 14px;"
+                        f"border-top:3px solid {_col};border-radius:10px;padding:14px 16px;"
                         f"margin-bottom:10px'>"
-                        f"<div style='font-size:.65rem;color:{TXT_S};font-weight:700;"
-                        f"letter-spacing:.07em;margin-bottom:4px'>SCORE VIABILIDADE</div>"
-                        f"<div style='font-size:1.9rem;font-weight:800;color:{_col};"
+                        f"<div style='font-size:.62rem;color:{TXT_S};font-weight:700;"
+                        f"letter-spacing:.08em;margin-bottom:6px;text-transform:uppercase'>SCORE DE VIABILIDADE</div>"
+                        f"<div style='font-size:2rem;font-weight:800;color:{_col};"
                         f"font-family:Montserrat,sans-serif;line-height:1'>{_sc}"
-                        f"<span style='font-size:.9rem'>/100</span></div>"
-                        f"<div style='background:{BORDER};border-radius:4px;height:5px;"
-                        f"margin:7px 0 5px'>"
-                        f"<div style='background:{_col};width:{_bar_w}%;height:5px;"
+                        f"<span style='font-size:.85rem;color:{TXT_S}'>/100</span></div>"
+                        f"<div style='background:{BORDER};border-radius:4px;height:6px;"
+                        f"margin:8px 0 6px'>"
+                        f"<div style='background:{_col};width:{_bar_w}%;height:6px;"
                         f"border-radius:4px'></div></div>"
-                        f"<div style='font-size:.72rem;font-weight:700;color:{_col}'>{_lbl}</div>"
+                        f"<div style='font-size:.75rem;font-weight:700;color:{_col};margin-bottom:2px'>{_lbl}</div>"
+                        f"<div style='font-size:.65rem;color:{TXT_S};line-height:1.4;"
+                        f"margin-bottom:4px;font-style:italic'>{_cls_desc}</div>"
                         f"<div style='font-size:.68rem;color:{TXT_S};margin-top:3px'>{_cls}</div>"
-                        f"<div style='font-size:.70rem;color:{TXT_S};margin-top:2px;"
-                        f"font-style:italic'>{_cn}</div>"
+                        f"<div style='font-size:.72rem;color:{TXT_H};margin-top:4px;"
+                        f"font-weight:600;border-top:1px solid {BORDER};padding-top:6px'>{_cn}</div>"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
 
         # Explicacao de como o score e gerado
+        _class_legend = (
+            f"<div style='margin-top:8px'>"
+            f"<div style='font-size:.68rem;color:{TXT_H};font-weight:600;margin-bottom:6px'>O que significa cada classificacao:</div>"
+        )
+        for _cls_name, _cls_color in [("Cliente Estrategico", C_GREEN), ("Cliente Relevante", C_CYAN),
+                                       ("Cliente Oportunista", C_AMBER), ("Cliente de Baixo Valor", C_RED)]:
+            _class_legend += (
+                f"<div style='font-size:.66rem;margin-bottom:4px;padding:4px 8px;"
+                f"border-left:2px solid {_cls_color};background:rgba(0,0,0,0.15);border-radius:0 4px 4px 0'>"
+                f"<b style='color:{_cls_color}'>{_cls_name}:</b> "
+                f"<span style='color:{TXT_S}'>{_SCORE_CLASS_DESC[_cls_name]}</span></div>"
+            )
+        _class_legend += "</div>"
+
         st.markdown(
             f"<details style='margin-bottom:12px'>"
             f"<summary style='font-size:.72rem;color:{C_CYAN};cursor:pointer;font-weight:600'>"
-            f"Como o Score de Viabilidade e calculado?</summary>"
-            f"<div style='font-size:.70rem;color:{TXT_S};padding:8px 12px;line-height:1.6;"
+            f"Como o Score de Viabilidade e calculado? (clique para expandir)</summary>"
+            f"<div style='font-size:.70rem;color:{TXT_S};padding:10px 14px;line-height:1.6;"
             f"background:{BG_CARD};border:1px solid {BORDER};border-radius:8px;margin-top:6px'>"
             f"O <b style='color:{TXT_H}'>Score de Viabilidade</b> e um indice de 0 a 100 calculado "
             f"automaticamente pelo sistema com base em <b>8 fatores ponderados</b>:<br><br>"
-            f"<b style='color:{C_GREEN}'>Fatores positivos:</b><br>"
+            f"<b style='color:{C_GREEN}'>Fatores positivos (somam pontos):</b><br>"
             f"&bull; <b>Frequencia de compra (25%)</b> — quanto menor o intervalo entre pedidos, maior a pontuacao<br>"
-            f"&bull; <b>Recorrencia (20%)</b> — percentual de semanas em que o cliente esteve ativo<br>"
+            f"&bull; <b>Recorrencia (20%)</b> — percentual de semanas em que o cliente esteve ativo no periodo<br>"
             f"&bull; <b>Volume total (15%)</b> — volume em kg comparado com a media da base<br>"
             f"&bull; <b>Volume medio por pedido (10%)</b> — consistencia no tamanho das compras<br>"
             f"&bull; <b>Tendencia (10%)</b> — se o volume esta crescendo, estavel ou caindo<br><br>"
-            f"<b style='color:{C_RED}'>Penalidades (reduzem o score):</b><br>"
+            f"<b style='color:{C_RED}'>Penalidades (reduzem pontos):</b><br>"
             f"&bull; <b>Concentracao (-10%)</b> — se mais de 50% do volume esta em um unico pedido<br>"
-            f"&bull; <b>Primeiro pedido inflado (-10%)</b> — se o primeiro pedido foi 2x maior que os demais (possivel formacao de estoque)<br>"
+            f"&bull; <b>Primeiro pedido inflado (-10%)</b> — se o 1o pedido foi 2x maior que os demais (possivel formacao de estoque)<br>"
             f"&bull; <b>Sazonalidade (-10%)</b> — se o coeficiente de variacao ultrapassa 60%, indicando compras muito irregulares<br><br>"
-            f"<b style='color:{TXT_H}'>Classificacao:</b> "
+            f"<b style='color:{TXT_H}'>Faixas de classificacao:</b><br>"
             f"<span style='color:{C_GREEN}'>80-100 = Estrategico</span> · "
             f"<span style='color:{C_CYAN}'>60-79 = Relevante</span> · "
             f"<span style='color:{C_AMBER}'>40-59 = Oportunista</span> · "
             f"<span style='color:{C_RED}'>0-39 = Baixo valor</span>"
+            f"{_class_legend}"
             f"</div></details>",
             unsafe_allow_html=True,
         )
@@ -2325,24 +2406,12 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
             except Exception as _pdf_err:
                 st.warning(f"Erro ao gerar PDF: {_pdf_err}")
 
-    # ── Disclaimer da IA ──────────────────────────────────────────────────────
+    # ── Rodape discreto ───────────────────────────────────────────────────────
     st.markdown(
-        f"<div style='font-size:.68rem;color:{TXT_S};margin-top:18px;padding-top:10px;"
-        f"border-top:1px solid {BORDER}'>"
+        f"<div style='font-size:.60rem;color:{TXT_S};margin-top:18px;padding-top:8px;"
+        f"border-top:1px solid {BORDER};text-align:center;opacity:0.7'>"
         f"GPT-4o-mini &nbsp;&middot;&nbsp; Analise sob demanda &nbsp;&middot;&nbsp; "
-        f"Somente ao clicar no botao</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f"<div style='background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.25);"
-        f"border-radius:8px;padding:10px 14px;margin-top:10px'>"
-        f"<div style='font-size:.70rem;color:{C_AMBER};font-weight:600;margin-bottom:3px'>"
-        f"⚠ Aviso Importante</div>"
-        f"<div style='font-size:.68rem;color:{TXT_S};line-height:1.5'>"
-        f"Toda Inteligencia Artificial pode cometer erros. Os dados e conclusoes apresentados "
-        f"devem ser revisados criticamente antes de serem utilizados para tomada de decisao. "
-        f"Valide as informacoes com os dados originais sempre que possivel.</div>"
-        f"</div>",
+        f"Toda IA pode cometer erros — revise criticamente antes de tomar decisoes.</div>",
         unsafe_allow_html=True,
     )
 
