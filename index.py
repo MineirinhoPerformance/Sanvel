@@ -1898,44 +1898,41 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
             pdf.cell(0, 5, _safe(_cli), ln=1)
         pdf.set_y(y_start + block_h + 3)
 
-    # ── 2) Score cards de viabilidade por cliente ────────────────────────────
+    # ── 2) Score cards de viabilidade por cliente (compactos) ──────────────
     if scores_info:
         for cli_name, score, label, color_hex in scores_info:
             r, g, b = int(color_hex[1:3], 16), int(color_hex[3:5], 16), int(color_hex[5:7], 16)
-            # Descritivo da classificacao
-            _cls_desc = _SCORE_CLASS_DESC.get(label, "")
+            card_h = 14
+            # Verifica se cabe na pagina, senao quebra
+            if pdf.get_y() + card_h + 3 > pdf.h - pdf.b_margin:
+                pdf.add_page()
             # Card com borda colorida no topo
             pdf.set_draw_color(r, g, b)
             pdf.set_fill_color(*_CARD_BG)
             x0, y0 = 10, pdf.get_y()
-            card_h = 22 if not _cls_desc else 28
             pdf.rect(x0, y0, 190, card_h, 'FD')
             pdf.set_fill_color(r, g, b)
-            pdf.rect(x0, y0, 190, 1.5, 'F')
+            pdf.rect(x0, y0, 190, 1.2, 'F')
             # Score
             pdf.set_xy(x0 + 5, y0 + 3)
-            pdf.set_font("Helvetica", "B", 16)
+            pdf.set_font("Helvetica", "B", 14)
             pdf.set_text_color(r, g, b)
-            _x_after_score = pdf.get_x()
-            pdf.cell(28, 8, _safe(f"{score}/100"))
+            pdf.cell(25, 7, _safe(f"{score}/100"))
             # Label
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.cell(55, 8, _safe(label))
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.cell(50, 7, _safe(label))
             # Cliente
             pdf.set_font("Helvetica", "", 8)
             pdf.set_text_color(*_WHITE)
-            pdf.cell(0, 8, _safe(cli_name), ln=1)
-            # Descritivo da classificacao
-            if _cls_desc:
-                pdf.set_xy(x0 + 5, y0 + 13)
-                pdf.set_font("Helvetica", "I", 6.5)
-                pdf.set_text_color(*_GRAY)
-                pdf.multi_cell(180, 3, _safe(_cls_desc))
-            pdf.set_y(y0 + card_h + 3)
+            pdf.cell(0, 7, _safe(cli_name), ln=1)
+            pdf.set_y(y0 + card_h + 2)
         pdf.ln(1)
 
         # ── 3) Explicacao de como o score e calculado ────────────────────────
         if score_explanation:
+            # Verifica espaco para o cabecalho da metodologia
+            if pdf.get_y() + 20 > pdf.h - pdf.b_margin:
+                pdf.add_page()
             pdf.set_draw_color(*_BORDER)
             pdf.set_fill_color(*_CARD_BG)
             pdf.rect(10, pdf.get_y(), 190, 5, 'FD')
@@ -2006,6 +2003,9 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
         pdf.ln(3)
 
     # ── 4) Glossario de metricas ─────────────────────────────────────────────
+    # Verifica espaco para o cabecalho do glossario
+    if pdf.get_y() + 20 > pdf.h - pdf.b_margin:
+        pdf.add_page()
     pdf.set_fill_color(*_CARD_BG)
     pdf.set_draw_color(*_BORDER)
     pdf.rect(10, pdf.get_y(), 190, 5, 'FD')
@@ -2046,6 +2046,9 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
     pdf.ln(3)
 
     # ── 5) Analise da IA (conteudo markdown) ─────────────────────────────────
+    # Verifica espaco para o cabecalho da analise
+    if pdf.get_y() + 15 > pdf.h - pdf.b_margin:
+        pdf.add_page()
     pdf.set_fill_color(*_CARD_BG)
     pdf.set_draw_color(*_BORDER)
     pdf.rect(10, pdf.get_y(), 190, 5, 'FD')
@@ -2218,11 +2221,11 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
             _scores_for_pdf.append((_cd["cliente"], _sc, _lbl, _col))
 
     if _pre_scores:
-        # Mostra scores em colunas (max 4 por linha)
+        # Mostra scores em colunas (sempre 4 por linha para largura uniforme)
         _max_cols = min(len(_pre_scores), 4)
         for _chunk_start in range(0, len(_pre_scores), _max_cols):
             _chunk = _pre_scores[_chunk_start:_chunk_start + _max_cols]
-            _scols = st.columns(len(_chunk))
+            _scols = st.columns(_max_cols)
             for _ci, (_cn, _sc, _lbl, _col, _cls) in enumerate(_chunk):
                 with _scols[_ci]:
                     _bar_w = int(_sc)
