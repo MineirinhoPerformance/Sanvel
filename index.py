@@ -2120,10 +2120,6 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
     import os     as _os2
 
     _api_key = _os2.environ.get("OPENAI_API_KEY", "")
-    if not _api_key:
-        st.warning("OPENAI_API_KEY nao encontrada. Configure no .env e reinicie.")
-        return
-    _oa.api_key = _api_key
 
     # ── Cabecalho profissional ──────────────────────────────────────────────
     st.markdown(
@@ -2313,6 +2309,19 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
     )
 
     # ── Cache e reanálise ─────────────────────────────────────────────────────
+    if not _api_key:
+        st.warning("OPENAI_API_KEY nao encontrada. Configure no .env e reinicie.")
+        # Rodape discreto mesmo sem API key
+        st.markdown(
+            f"<div style='font-size:.60rem;color:{TXT_S};margin-top:18px;padding-top:8px;"
+            f"border-top:1px solid {BORDER};text-align:center;opacity:0.7'>"
+            f"GPT-4o-mini &nbsp;&middot;&nbsp; Analise sob demanda &nbsp;&middot;&nbsp; "
+            f"Toda IA pode cometer erros — revise criticamente antes de tomar decisoes.</div>",
+            unsafe_allow_html=True,
+        )
+        return
+    _oa.api_key = _api_key
+
     _ck = _cache_key(chart_name)
     _cached = st.session_state["_ai_analysis_cache"].get(_ck)
 
