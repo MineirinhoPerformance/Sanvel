@@ -1482,23 +1482,175 @@ def build_ai_context(analysis_type, chart_name, df_f, df_b, df_r, periodo=None, 
 # ── Prompts especializados por tipo de analise ────────────────────────────────
 
 _STAT_TERMS_GLOSSARY = (
-    "\n\nGLOSSARIO — ao citar termos estatisticos, inclua uma breve explicacao entre parenteses para leigos:\n"
-    "- Media (soma de todos os valores dividida pela quantidade)\n"
-    "- Mediana (valor central quando todos sao ordenados — metade esta acima, metade abaixo)\n"
-    "- Desvio padrao (o quanto os valores variam em relacao a media — quanto maior, mais irregular)\n"
-    "- Coeficiente de variacao / CV (variabilidade percentual — acima de 60% indica comportamento muito instavel)\n"
-    "- IQR / Amplitude interquartil (faixa onde estao os 50% centrais dos dados, ignora extremos)\n"
-    "- HHI / Indice Herfindahl (mede concentracao — 0 = distribuido igualmente, 100 = totalmente concentrado em um item)\n"
-    "- Slope / Inclinacao (direcao da tendencia linear — positivo = crescimento, negativo = queda)\n"
-    "- Outlier (valor atipico que foge muito do padrao dos demais)\n"
-    "Sempre que mencionar esses termos na analise, coloque a explicacao em parenteses logo apos.\n"
+    "\n\nGLOSSARIO DETALHADO — ao citar QUALQUER metrica ou termo estatistico, voce DEVE incluir uma explicacao "
+    "clara entre parenteses, como se estivesse explicando para alguem sem NENHUM conhecimento de estatistica:\n\n"
+    "- Media: soma de todos os valores dividida pela quantidade. Exemplo: (10+20+30)/3 = 20. "
+    "Mostra o valor tipico do conjunto.\n"
+    "- Mediana: valor central quando todos sao ordenados do menor ao maior. "
+    "Metade dos dados esta acima, metade abaixo. Mais confiavel que a media quando ha valores extremos.\n"
+    "- Desvio Padrao: mede o quanto os valores se espalham em relacao a media. "
+    "Desvio baixo = valores parecidos (estavel). Desvio alto = valores muito diferentes (irregular).\n"
+    "- CV (Coeficiente de Variacao): calculado como (Desvio Padrao / Media) x 100%. "
+    "Transforma a variacao em percentual. "
+    "Ate 15% = muito estavel. 15-30% = moderado. 30-60% = alto. Acima de 60% = muito instavel. "
+    "Exemplo: se a media e 100kg e o desvio padrao e 63.3kg, o CV = 63.3%, indicando alta variabilidade.\n"
+    "- IQR (Amplitude Interquartil): diferenca entre o 75o percentil (Q3) e o 25o percentil (Q1). "
+    "Mostra a faixa dos 50% centrais dos dados, ignorando extremos.\n"
+    "- HHI (Indice Herfindahl-Hirschman): mede concentracao, de 0 a 100. "
+    "0 = perfeitamente distribuido. Acima de 25 = alta concentracao (risco de dependencia).\n"
+    "- Slope (Inclinacao): direcao da tendencia linear ao longo do tempo. "
+    "Positivo = crescimento. Negativo = queda. Zero = estavel. "
+    "O valor indica a variacao media por periodo (ex: 2.5 = crescimento de 2.5kg/semana).\n"
+    "- Outlier (Valor Atipico): valor que foge muito do padrao (abaixo de Q1 - 1.5*IQR ou acima de Q3 + 1.5*IQR). "
+    "Deve ser investigado mas nao indica necessariamente um problema.\n"
+    "- Concentracao Top 1: percentual do volume total que vem do maior item. "
+    "Acima de 50% = risco alto de dependencia.\n"
+    "- Taxa de Recorrencia: percentual de semanas em que houve pelo menos uma compra. "
+    "Acima de 70% = muito recorrente. Abaixo de 40% = esporadico.\n\n"
+    "REGRA: Sempre que mencionar qualquer um desses termos, OBRIGATORIAMENTE coloque a explicacao "
+    "entre parenteses logo apos o valor. O leitor NAO tem conhecimento tecnico.\n"
 )
 
 _AI_PRECALC_NOTICE = (
     "\n\nIMPORTANTE: Todos os calculos estatisticos ja foram realizados previamente pelo sistema. "
     "Voce deve APENAS interpretar os numeros fornecidos. NAO recalcule medias, desvios, slopes ou qualquer metrica. "
     "Use os valores exatos do JSON.\n"
+    "\nPara CADA metrica que voce citar na analise, inclua entre parenteses uma explicacao curta do que ela significa "
+    "e como interpretar o valor. Parta do principio que o leitor NAO tem conhecimento de estatistica.\n"
 )
+
+# ── Legendas detalhadas de metricas (exibidas no modal e no PDF) ─────────────
+_METRIC_LEGENDS = [
+    {
+        "nome": "Media",
+        "formula": "Soma de todos os valores / quantidade de valores",
+        "explicacao": (
+            "E o valor 'tipico' ou 'medio' do conjunto de dados. "
+            "Exemplo: se um cliente comprou 10kg, 20kg e 30kg em tres semanas, "
+            "a media e (10+20+30)/3 = 20kg por semana."
+        ),
+        "como_interpretar": "Compare com a mediana. Se a media for muito diferente da mediana, existem valores extremos distorcendo o resultado.",
+    },
+    {
+        "nome": "Mediana",
+        "formula": "Valor central quando todos os dados sao ordenados do menor ao maior",
+        "explicacao": (
+            "Metade dos valores esta acima da mediana e metade esta abaixo. "
+            "E mais confiavel que a media quando ha valores muito altos ou muito baixos (outliers). "
+            "Exemplo: nos valores 5, 8, 10, 12, 100 — a mediana e 10, enquanto a media seria 27."
+        ),
+        "como_interpretar": "Se a mediana for muito menor que a media, significa que poucos valores altos estao puxando a media para cima.",
+    },
+    {
+        "nome": "Desvio Padrao",
+        "formula": "Raiz quadrada da media dos quadrados das diferencas em relacao a media",
+        "explicacao": (
+            "Mede o quanto os valores se espalham em relacao a media. "
+            "Um desvio padrao BAIXO significa que os valores sao parecidos entre si (comportamento estavel). "
+            "Um desvio padrao ALTO significa que os valores variam muito (comportamento irregular)."
+        ),
+        "como_interpretar": "Quanto menor o desvio padrao, mais previsivel e o comportamento. Ideal para planejar compras e estoques.",
+    },
+    {
+        "nome": "Coeficiente de Variacao (CV)",
+        "formula": "CV = (Desvio Padrao / Media) x 100%",
+        "explicacao": (
+            "Transforma o desvio padrao em PERCENTUAL para facilitar a comparacao. "
+            "Diz qual porcentagem da media representa a variacao dos dados. "
+            "Exemplo: Media = 100kg, Desvio Padrao = 63.3kg -> CV = 63.3%. "
+            "Isso significa que os valores tipicamente variam 63.3% para cima ou para baixo da media."
+        ),
+        "como_interpretar": (
+            "CV ate 15% = muito estavel (cliente previsivel). "
+            "CV de 15% a 30% = variacao moderada (normal para a maioria). "
+            "CV de 30% a 60% = variacao alta (atencao necessaria). "
+            "CV acima de 60% = muito instavel (compras extremamente irregulares, risco de sazonalidade)."
+        ),
+    },
+    {
+        "nome": "IQR (Amplitude Interquartil)",
+        "formula": "IQR = Q3 - Q1 (diferenca entre o 75o e o 25o percentil)",
+        "explicacao": (
+            "Mostra a faixa onde estao os 50% centrais dos dados, ignorando os extremos. "
+            "E util para entender a variacao 'real' sem ser influenciado por valores atipicos."
+        ),
+        "como_interpretar": "Um IQR pequeno indica que a maioria dos valores esta concentrada. Um IQR grande indica que mesmo os valores centrais variam bastante.",
+    },
+    {
+        "nome": "HHI (Indice Herfindahl-Hirschman)",
+        "formula": "Soma dos quadrados das participacoes percentuais, normalizado de 0 a 100",
+        "explicacao": (
+            "Mede concentracao — se o volume esta bem distribuido entre os itens ou concentrado em poucos. "
+            "HHI = 0 significa distribuicao perfeitamente igual. HHI = 100 significa tudo concentrado em um unico item."
+        ),
+        "como_interpretar": (
+            "HHI ate 15 = baixa concentracao (saudavel, bem distribuido). "
+            "HHI de 15 a 25 = concentracao moderada. "
+            "HHI acima de 25 = alta concentracao (risco de dependencia de poucos itens)."
+        ),
+    },
+    {
+        "nome": "Slope (Inclinacao da Tendencia)",
+        "formula": "Inclinacao da reta de tendencia linear calculada por regressao",
+        "explicacao": (
+            "Mostra a DIRECAO geral dos dados ao longo do tempo. "
+            "Slope POSITIVO = os valores estao crescendo semana a semana. "
+            "Slope NEGATIVO = os valores estao caindo. "
+            "Slope ZERO = comportamento estavel, sem tendencia clara."
+        ),
+        "como_interpretar": "O valor do slope indica quantos kg a mais (ou a menos) por semana. Ex: slope = 2.5 significa crescimento de 2.5kg por semana em media.",
+    },
+    {
+        "nome": "Outlier (Valor Atipico)",
+        "formula": "Valor que esta abaixo de Q1 - 1.5*IQR ou acima de Q3 + 1.5*IQR",
+        "explicacao": (
+            "E um dado que foge MUITO do padrao dos demais. "
+            "Pode indicar um evento extraordinario (pedido especial, promocao) ou um erro."
+        ),
+        "como_interpretar": "Outliers nao sao necessariamente ruins — mas devem ser investigados. Um pico isolado nao indica tendencia de crescimento.",
+    },
+    {
+        "nome": "Concentracao Top 1 (%)",
+        "formula": "Volume do maior item / Volume total x 100%",
+        "explicacao": (
+            "Mostra qual porcentagem do volume total vem de um UNICO item (pedido, produto ou cliente). "
+            "Se um unico pedido representa 70% do volume, ha alto risco de dependencia."
+        ),
+        "como_interpretar": (
+            "Ate 30% = saudavel. "
+            "De 30% a 50% = concentracao moderada, monitorar. "
+            "Acima de 50% = risco alto. "
+            "Acima de 70% = risco critico de dependencia."
+        ),
+    },
+    {
+        "nome": "Taxa de Recorrencia (%)",
+        "formula": "Semanas com compra / Total de semanas no periodo x 100%",
+        "explicacao": (
+            "Mostra em quantas semanas do periodo o cliente fez pelo menos uma compra. "
+            "Um cliente com 100% de recorrencia comprou em todas as semanas."
+        ),
+        "como_interpretar": (
+            "Acima de 70% = cliente muito recorrente e confiavel. "
+            "De 40% a 70% = recorrencia moderada. "
+            "Abaixo de 40% = cliente esporadico ou sazonal."
+        ),
+    },
+    {
+        "nome": "Score de Viabilidade (0-100)",
+        "formula": "Pontuacao composta: Frequencia(25%) + Recorrencia(20%) + Volume(15%) + Vol.Medio(10%) + Tendencia(10%) - Concentracao(10%) - 1o Pedido Inflado(10%) - Sazonalidade(10%)",
+        "explicacao": (
+            "Indice calculado automaticamente que resume a viabilidade comercial de um cliente em um unico numero. "
+            "Combina fatores positivos (frequencia, recorrencia, volume, tendencia) com penalidades (concentracao, primeiro pedido inflado, sazonalidade)."
+        ),
+        "como_interpretar": (
+            "80-100 = Cliente Estrategico (prioridade maxima). "
+            "60-79 = Cliente Relevante (manter e expandir). "
+            "40-59 = Cliente Oportunista (avaliar potencial). "
+            "0-39 = Cliente de Baixo Valor (revisar estrategia)."
+        ),
+    },
+]
 
 _SYSTEM_COMMERCIAL = (
     "Voce e um analista senior de inteligencia comercial especializado em distribuicao de alimentos/produtos.\n"
@@ -1608,8 +1760,9 @@ _CHART_SPECIFIC_INSTRUCTIONS = {
 
 # ── Gerador de PDF ────────────────────────────────────────────────────────────
 
-def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None):
-    """Gera PDF da analise mantendo cores e formatacao."""
+def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
+                   clientes_list=None, score_explanation=True):
+    """Gera PDF da analise IDENTICO ao modal — inclui clientes, scores, legendas, analise e disclaimer."""
     from fpdf import FPDF
     import re as _re
     import tempfile as _tmp
@@ -1634,71 +1787,243 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None):
             txt = txt.replace(uc, repl)
         return txt.encode('latin-1', errors='replace').decode('latin-1')
 
+    # Cores do tema escuro
+    _BG = (8, 14, 28)
+    _CYAN = (56, 189, 248)
+    _WHITE = (241, 245, 249)
+    _GRAY = (100, 116, 139)
+    _TEXT = (203, 213, 225)
+    _BORDER = (26, 46, 80)
+    _GREEN = (52, 211, 153)
+    _RED = (248, 113, 113)
+    _AMBER = (251, 191, 36)
+    _CARD_BG = (15, 23, 42)
+
     class _AnalysisPDF(FPDF):
         def header(self):
-            self.set_fill_color(8, 14, 28)
+            self.set_fill_color(*_BG)
             self.rect(0, 0, 210, 297, 'F')
             self.set_font("Helvetica", "B", 16)
-            self.set_text_color(56, 189, 248)
+            self.set_text_color(*_CYAN)
             self.cell(0, 10, _safe("INTELIGENCIA COMERCIAL"), ln=True, align="C")
             self.set_font("Helvetica", "B", 12)
-            self.set_text_color(241, 245, 249)
+            self.set_text_color(*_WHITE)
             self.cell(0, 8, _safe(chart_name), ln=True, align="C")
             self.set_font("Helvetica", "", 8)
-            self.set_text_color(100, 116, 139)
-            self.cell(0, 6, _safe(f"Periodo: {str(date_from)} a {str(date_to)}"), ln=True, align="C")
-            self.ln(4)
-            self.set_draw_color(26, 46, 80)
+            self.set_text_color(*_GRAY)
+            self.cell(0, 6, _safe(f"Analise baseada nos dados filtrados atualmente no dashboard"), ln=True, align="C")
+            self.cell(0, 5, _safe(f"Periodo: {str(date_from)} a {str(date_to)}"), ln=True, align="C")
+            self.ln(3)
+            self.set_draw_color(*_BORDER)
             self.line(10, self.get_y(), 200, self.get_y())
-            self.ln(4)
+            self.ln(3)
 
         def footer(self):
-            self.set_y(-25)
-            self.set_font("Helvetica", "I", 7)
-            self.set_text_color(100, 116, 139)
-            self.cell(0, 4, _safe("Lembrete: Toda Inteligencia Artificial pode cometer erros."), ln=True, align="C")
-            self.cell(0, 4, _safe("E importante revisar a analise apresentada antes de tomar decisoes."), ln=True, align="C")
+            self.set_y(-30)
+            self.set_draw_color(*_BORDER)
+            self.line(10, self.get_y(), 200, self.get_y())
+            self.ln(3)
+            self.set_fill_color(25, 20, 5)
+            self.rect(10, self.get_y(), 190, 18, 'F')
+            self.set_draw_color(*_AMBER)
+            self.rect(10, self.get_y(), 190, 18, 'D')
+            y0 = self.get_y() + 2
+            self.set_xy(14, y0)
+            self.set_font("Helvetica", "B", 7)
+            self.set_text_color(*_AMBER)
+            self.cell(0, 4, _safe("AVISO IMPORTANTE"), ln=True)
+            self.set_x(14)
+            self.set_font("Helvetica", "", 6.5)
+            self.set_text_color(*_GRAY)
+            self.multi_cell(182, 3.5, _safe(
+                "Toda Inteligencia Artificial pode cometer erros. Os dados e conclusoes apresentados "
+                "devem ser revisados criticamente antes de serem utilizados para tomada de decisao. "
+                "Valide as informacoes com os dados originais sempre que possivel."
+            ))
+            self.set_font("Helvetica", "I", 6)
+            self.set_text_color(*_GRAY)
             self.cell(0, 4, _safe(f"GPT-4o-mini  |  Pagina {self.page_no()}"), ln=True, align="C")
 
     pdf = _AnalysisPDF()
-    pdf.set_auto_page_break(auto=True, margin=30)
+    pdf.set_auto_page_break(auto=True, margin=35)
     pdf.add_page()
 
+    # ── 1) Bloco de clientes analisados (identico ao modal) ──────────────────
+    if clientes_list:
+        pdf.set_fill_color(*_CARD_BG)
+        pdf.set_draw_color(*_CYAN)
+        x0, y0 = 10, pdf.get_y()
+        # Renderizar cada cliente em linha separada
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(*_GRAY)
+        pdf.cell(0, 5, _safe(f"CLIENTES ANALISADOS ({len(clientes_list)})"), ln=True)
+        for _cli in clientes_list:
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*_WHITE)
+            pdf.cell(3)
+            pdf.cell(0, 5, _safe(f"  {_cli}"), ln=True)
+        pdf.ln(4)
+
+    # ── 2) Score cards de viabilidade por cliente ────────────────────────────
     if scores_info:
         for cli_name, score, label, color_hex in scores_info:
             r, g, b = int(color_hex[1:3], 16), int(color_hex[3:5], 16), int(color_hex[5:7], 16)
             pdf.set_draw_color(r, g, b)
+            pdf.set_fill_color(*_CARD_BG)
+            x0 = 10
+            y0 = pdf.get_y()
+            pdf.rect(x0, y0, 190, 18, 'FD')
+            # Linha colorida no topo do card
+            pdf.set_fill_color(r, g, b)
+            pdf.rect(x0, y0, 190, 1.5, 'F')
+            # Score grande
+            pdf.set_xy(x0 + 5, y0 + 3)
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.set_text_color(r, g, b)
+            pdf.cell(25, 7, _safe(f"{score}/100"), ln=False)
+            # Label e cliente
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(r, g, b)
-            pdf.cell(0, 6, _safe(f"Score: {score}/100 - {label} | {cli_name}"), ln=True)
-        pdf.ln(4)
+            pdf.cell(60, 7, _safe(f"  {label}"), ln=False)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*_WHITE)
+            pdf.cell(0, 7, _safe(f"  {cli_name}"), ln=True)
+            pdf.set_y(y0 + 20)
+        pdf.ln(2)
+
+        # ── 3) Explicacao de como o score e calculado ────────────────────────
+        if score_explanation:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*_CYAN)
+            pdf.cell(0, 6, _safe("Como o Score de Viabilidade e calculado?"), ln=True)
+            pdf.set_font("Helvetica", "", 7.5)
+            pdf.set_text_color(*_TEXT)
+            pdf.multi_cell(0, 4, _safe(
+                "O Score de Viabilidade e um indice de 0 a 100 calculado automaticamente pelo sistema "
+                "com base em 8 fatores ponderados:"
+            ))
+            pdf.ln(1)
+            pdf.set_font("Helvetica", "B", 7.5)
+            pdf.set_text_color(*_GREEN)
+            pdf.cell(0, 4, _safe("Fatores positivos:"), ln=True)
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(*_TEXT)
+            for _item in [
+                "Frequencia de compra (25%) - quanto menor o intervalo entre pedidos, maior a pontuacao",
+                "Recorrencia (20%) - percentual de semanas em que o cliente esteve ativo",
+                "Volume total (15%) - volume em kg comparado com a media da base",
+                "Volume medio por pedido (10%) - consistencia no tamanho das compras",
+                "Tendencia (10%) - se o volume esta crescendo, estavel ou caindo",
+            ]:
+                pdf.cell(5)
+                pdf.multi_cell(0, 3.5, _safe(f"  * {_item}"))
+            pdf.ln(1)
+            pdf.set_font("Helvetica", "B", 7.5)
+            pdf.set_text_color(*_RED)
+            pdf.cell(0, 4, _safe("Penalidades (reduzem o score):"), ln=True)
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(*_TEXT)
+            for _item in [
+                "Concentracao (-10%) - se mais de 50% do volume esta em um unico pedido",
+                "Primeiro pedido inflado (-10%) - se o 1o pedido foi 2x maior que os demais (possivel formacao de estoque)",
+                "Sazonalidade (-10%) - se o coeficiente de variacao ultrapassa 60%, indicando compras irregulares",
+            ]:
+                pdf.cell(5)
+                pdf.multi_cell(0, 3.5, _safe(f"  * {_item}"))
+            pdf.ln(1)
+            pdf.set_font("Helvetica", "B", 7)
+            pdf.set_text_color(*_WHITE)
+            pdf.multi_cell(0, 3.5, _safe(
+                "Classificacao: 80-100 = Estrategico | 60-79 = Relevante | 40-59 = Oportunista | 0-39 = Baixo valor"
+            ))
+            pdf.ln(3)
+
+        pdf.set_draw_color(*_BORDER)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(3)
+
+    # ── 4) Glossario de metricas (identico ao modal) ─────────────────────────
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_text_color(*_CYAN)
+    pdf.cell(0, 7, _safe("Glossario de Metricas Utilizadas"), ln=True)
+    pdf.set_font("Helvetica", "", 7)
+    pdf.set_text_color(*_GRAY)
+    pdf.multi_cell(0, 3.5, _safe(
+        "Abaixo estao explicadas todas as metricas utilizadas nesta analise, "
+        "com formulas e orientacoes de interpretacao para facilitar a leitura."
+    ))
+    pdf.ln(2)
+
+    for _leg in _METRIC_LEGENDS:
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(*_WHITE)
+        pdf.cell(0, 5, _safe(_leg["nome"]), ln=True)
+        pdf.set_font("Helvetica", "I", 7)
+        pdf.set_text_color(*_CYAN)
+        pdf.cell(5)
+        pdf.multi_cell(0, 3.5, _safe(f"Formula: {_leg['formula']}"))
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(*_TEXT)
+        pdf.cell(5)
+        pdf.multi_cell(0, 3.5, _safe(f"O que e: {_leg['explicacao']}"))
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(*_GREEN)
+        pdf.cell(5)
+        pdf.multi_cell(0, 3.5, _safe(f"Como interpretar: {_leg['como_interpretar']}"))
+        pdf.ln(1.5)
+
+    pdf.set_draw_color(*_BORDER)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(4)
+
+    # ── 5) Analise da IA (conteudo markdown) ─────────────────────────────────
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_text_color(*_CYAN)
+    pdf.cell(0, 7, _safe("Analise de Inteligencia Artificial"), ln=True)
+    pdf.ln(2)
 
     lines = analysis_md.split("\n") if analysis_md else []
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("### "):
+        if stripped.startswith("#### "):
+            pdf.ln(2)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*_CYAN)
+            pdf.cell(0, 6, _safe(stripped[5:]), ln=True)
+        elif stripped.startswith("### "):
             pdf.ln(3)
             pdf.set_font("Helvetica", "B", 11)
-            pdf.set_text_color(56, 189, 248)
+            pdf.set_text_color(*_CYAN)
             pdf.cell(0, 7, _safe(stripped[4:]), ln=True)
         elif stripped.startswith("## "):
             pdf.ln(3)
             pdf.set_font("Helvetica", "B", 13)
-            pdf.set_text_color(56, 189, 248)
+            pdf.set_text_color(*_CYAN)
             pdf.cell(0, 8, _safe(stripped[3:]), ln=True)
+        elif stripped.startswith("# "):
+            pdf.ln(3)
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.set_text_color(*_CYAN)
+            pdf.cell(0, 9, _safe(stripped[2:]), ln=True)
         elif stripped.startswith("**") and stripped.endswith("**"):
             pdf.set_font("Helvetica", "B", 9)
-            pdf.set_text_color(241, 245, 249)
+            pdf.set_text_color(*_WHITE)
             pdf.cell(0, 5, _safe(stripped.replace("**", "")), ln=True)
         elif stripped.startswith("- ") or stripped.startswith("* "):
             pdf.set_font("Helvetica", "", 9)
-            pdf.set_text_color(203, 213, 225)
+            pdf.set_text_color(*_TEXT)
             clean = _re.sub(r'\*\*(.*?)\*\*', r'\1', stripped[2:])
             pdf.cell(5)
             pdf.multi_cell(0, 5, _safe(f"  {clean}"))
+        elif stripped.startswith("> "):
+            pdf.set_font("Helvetica", "I", 8)
+            pdf.set_text_color(*_GRAY)
+            clean = _re.sub(r'\*\*(.*?)\*\*', r'\1', stripped[2:])
+            pdf.cell(8)
+            pdf.multi_cell(0, 4.5, _safe(clean))
         elif stripped:
             pdf.set_font("Helvetica", "", 9)
-            pdf.set_text_color(203, 213, 225)
+            pdf.set_text_color(*_TEXT)
             clean = _re.sub(r'\*\*(.*?)\*\*', r'\1', stripped)
             pdf.multi_cell(0, 5, _safe(clean))
 
@@ -1758,29 +2083,42 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
     except Exception:
         _ctx_parsed = {}
 
+    # Coleta lista de clientes para exibicao (cada um em linha separada)
     _clientes_filtrados = sorted(st.session_state.get("xf_cliente", set()))
+    _clientes_para_pdf = []  # lista simples de nomes para o PDF
+
     if _clientes_filtrados:
-        _cli_str = ", ".join(str(c) for c in _clientes_filtrados)
+        _clientes_para_pdf = [str(c) for c in _clientes_filtrados]
         _n_cli = len(_clientes_filtrados)
+        _cli_items = "".join(
+            f"<div style='font-size:.82rem;color:{TXT_H};padding:4px 0 4px 12px;"
+            f"border-left:2px solid {C_CYAN};margin-bottom:4px'>{c}</div>"
+            for c in _clientes_filtrados
+        )
         st.markdown(
             f"<div style='background:{BG_CARD};border:1px solid {BORDER};border-left:3px solid {C_CYAN};"
             f"border-radius:8px;padding:10px 14px;margin-bottom:12px'>"
             f"<div style='font-size:.68rem;color:{TXT_S};font-weight:700;"
-            f"letter-spacing:.06em;margin-bottom:3px'>CLIENTES ANALISADOS ({_n_cli})</div>"
-            f"<div style='font-size:.82rem;color:{TXT_H}'>{_cli_str}</div>"
+            f"letter-spacing:.06em;margin-bottom:8px'>CLIENTES ANALISADOS ({_n_cli})</div>"
+            f"{_cli_items}"
             f"</div>",
             unsafe_allow_html=True,
         )
     elif analysis_type in ("cliente", "volume") and "clientes" in _ctx_parsed:
         _all_cli = [c.get("cliente", "") for c in _ctx_parsed["clientes"]]
         if _all_cli:
-            _cli_str = ", ".join(str(c) for c in _all_cli)
+            _clientes_para_pdf = [str(c) for c in _all_cli]
+            _cli_items = "".join(
+                f"<div style='font-size:.82rem;color:{TXT_H};padding:4px 0 4px 12px;"
+                f"border-left:2px solid {C_TEAL};margin-bottom:4px'>{c}</div>"
+                for c in _all_cli
+            )
             st.markdown(
                 f"<div style='background:{BG_CARD};border:1px solid {BORDER};border-left:3px solid {C_TEAL};"
                 f"border-radius:8px;padding:10px 14px;margin-bottom:12px'>"
                 f"<div style='font-size:.68rem;color:{TXT_S};font-weight:700;"
-                f"letter-spacing:.06em;margin-bottom:3px'>CLIENTES ANALISADOS ({len(_all_cli)}) — Todos do filtro atual</div>"
-                f"<div style='font-size:.82rem;color:{TXT_H}'>{_cli_str}</div>"
+                f"letter-spacing:.06em;margin-bottom:8px'>CLIENTES ANALISADOS ({len(_all_cli)}) — Todos do filtro atual</div>"
+                f"{_cli_items}"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -1859,6 +2197,40 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
             unsafe_allow_html=True,
         )
 
+    # ── Glossario de metricas (legendas detalhadas para leigos) ─────────────
+    _legend_rows = ""
+    for _leg in _METRIC_LEGENDS:
+        _legend_rows += (
+            f"<div style='margin-bottom:10px;padding:8px 12px;background:{BG_CARD};"
+            f"border:1px solid {BORDER};border-radius:6px'>"
+            f"<div style='font-size:.78rem;color:{TXT_H};font-weight:700;margin-bottom:3px'>"
+            f"{_leg['nome']}</div>"
+            f"<div style='font-size:.68rem;color:{C_CYAN};font-style:italic;margin-bottom:3px'>"
+            f"Formula: {_leg['formula']}</div>"
+            f"<div style='font-size:.68rem;color:{TXT_S};margin-bottom:3px'>"
+            f"<b style='color:{TXT_H}'>O que e:</b> {_leg['explicacao']}</div>"
+            f"<div style='font-size:.68rem;color:{C_GREEN}'>"
+            f"<b>Como interpretar:</b> {_leg['como_interpretar']}</div>"
+            f"</div>"
+        )
+    st.markdown(
+        f"<details style='margin-bottom:14px'>"
+        f"<summary style='font-size:.72rem;color:{C_CYAN};cursor:pointer;font-weight:600'>"
+        f"Glossario de Metricas Utilizadas (clique para expandir)</summary>"
+        f"<div style='margin-top:8px;padding:6px 0'>"
+        f"<div style='font-size:.68rem;color:{TXT_S};margin-bottom:8px'>"
+        f"Abaixo estao explicadas todas as metricas utilizadas nesta analise, "
+        f"com formulas e orientacoes de interpretacao para facilitar a leitura.</div>"
+        f"{_legend_rows}"
+        f"</div></details>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"<hr style='border-color:{BORDER};margin:6px 0 14px'>",
+        unsafe_allow_html=True,
+    )
+
     # ── Cache e reanálise ─────────────────────────────────────────────────────
     _ck = _cache_key(chart_name)
     _cached = st.session_state["_ai_analysis_cache"].get(_ck)
@@ -1919,7 +2291,7 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
                         {"role": "system", "content": _sys_prompt},
                         {"role": "user",   "content": _user_msg},
                     ],
-                    max_tokens=2500,
+                    max_tokens=4000,
                     temperature=0.15,
                 )
                 _analysis = _resp.choices[0].message.content
@@ -1935,7 +2307,12 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
         _col_pdf, _ = st.columns([2.5, 7.5])
         with _col_pdf:
             try:
-                _pdf_path = _generate_pdf(_analysis, chart_name, _scores_for_pdf or None)
+                _pdf_path = _generate_pdf(
+                    _analysis, chart_name,
+                    scores_info=_scores_for_pdf or None,
+                    clientes_list=_clientes_para_pdf or None,
+                    score_explanation=bool(_pre_scores),
+                )
                 with open(_pdf_path, "rb") as _pf:
                     st.download_button(
                         label="📥 Exportar PDF",
