@@ -1614,19 +1614,39 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None):
     import re as _re
     import tempfile as _tmp
 
+    _UNICODE_MAP = {
+        '\u2014': '-', '\u2013': '-', '\u2012': '-',
+        '\u2018': "'", '\u2019': "'", '\u201C': '"', '\u201D': '"',
+        '\u2026': '...', '\u2022': '*', '\u2023': '>',
+        '\u2039': '<', '\u203A': '>', '\u00AB': '<<', '\u00BB': '>>',
+        '\u2190': '<-', '\u2192': '->', '\u2194': '<->',
+        '\u2265': '>=', '\u2264': '<=', '\u2260': '!=',
+        '\u221E': 'inf', '\u00B2': '2', '\u00B3': '3',
+        '\u2070': '0', '\u00B9': '1',
+        '\u0394': 'Delta', '\u03B1': 'alpha', '\u03B2': 'beta',
+        '\u2211': 'Sum', '\u221A': 'sqrt',
+        '\u20AC': 'EUR', '\u00A3': 'GBP', '\u00A5': 'JPY',
+    }
+
+    def _safe(txt: str) -> str:
+        """Sanitiza texto para latin-1 (compatibilidade FPDF Helvetica)."""
+        for uc, repl in _UNICODE_MAP.items():
+            txt = txt.replace(uc, repl)
+        return txt.encode('latin-1', errors='replace').decode('latin-1')
+
     class _AnalysisPDF(FPDF):
         def header(self):
             self.set_fill_color(8, 14, 28)
             self.rect(0, 0, 210, 297, 'F')
             self.set_font("Helvetica", "B", 16)
             self.set_text_color(56, 189, 248)
-            self.cell(0, 10, "INTELIGENCIA COMERCIAL", ln=True, align="C")
+            self.cell(0, 10, _safe("INTELIGENCIA COMERCIAL"), ln=True, align="C")
             self.set_font("Helvetica", "B", 12)
             self.set_text_color(241, 245, 249)
-            self.cell(0, 8, chart_name, ln=True, align="C")
+            self.cell(0, 8, _safe(chart_name), ln=True, align="C")
             self.set_font("Helvetica", "", 8)
             self.set_text_color(100, 116, 139)
-            self.cell(0, 6, f"Periodo: {str(date_from)} a {str(date_to)}", ln=True, align="C")
+            self.cell(0, 6, _safe(f"Periodo: {str(date_from)} a {str(date_to)}"), ln=True, align="C")
             self.ln(4)
             self.set_draw_color(26, 46, 80)
             self.line(10, self.get_y(), 200, self.get_y())
@@ -1636,9 +1656,9 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None):
             self.set_y(-25)
             self.set_font("Helvetica", "I", 7)
             self.set_text_color(100, 116, 139)
-            self.cell(0, 4, "Lembrete: Toda Inteligencia Artificial pode cometer erros.", ln=True, align="C")
-            self.cell(0, 4, "E importante revisar a analise apresentada antes de tomar decisoes.", ln=True, align="C")
-            self.cell(0, 4, f"GPT-4o-mini  |  Pagina {self.page_no()}", ln=True, align="C")
+            self.cell(0, 4, _safe("Lembrete: Toda Inteligencia Artificial pode cometer erros."), ln=True, align="C")
+            self.cell(0, 4, _safe("E importante revisar a analise apresentada antes de tomar decisoes."), ln=True, align="C")
+            self.cell(0, 4, _safe(f"GPT-4o-mini  |  Pagina {self.page_no()}"), ln=True, align="C")
 
     pdf = _AnalysisPDF()
     pdf.set_auto_page_break(auto=True, margin=30)
@@ -1650,7 +1670,7 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None):
             pdf.set_draw_color(r, g, b)
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(r, g, b)
-            pdf.cell(0, 6, f"Score: {score}/100 - {label} | {cli_name}", ln=True)
+            pdf.cell(0, 6, _safe(f"Score: {score}/100 - {label} | {cli_name}"), ln=True)
         pdf.ln(4)
 
     lines = analysis_md.split("\n") if analysis_md else []
@@ -1660,27 +1680,27 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None):
             pdf.ln(3)
             pdf.set_font("Helvetica", "B", 11)
             pdf.set_text_color(56, 189, 248)
-            pdf.cell(0, 7, stripped[4:], ln=True)
+            pdf.cell(0, 7, _safe(stripped[4:]), ln=True)
         elif stripped.startswith("## "):
             pdf.ln(3)
             pdf.set_font("Helvetica", "B", 13)
             pdf.set_text_color(56, 189, 248)
-            pdf.cell(0, 8, stripped[3:], ln=True)
+            pdf.cell(0, 8, _safe(stripped[3:]), ln=True)
         elif stripped.startswith("**") and stripped.endswith("**"):
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(241, 245, 249)
-            pdf.cell(0, 5, stripped.replace("**", ""), ln=True)
+            pdf.cell(0, 5, _safe(stripped.replace("**", "")), ln=True)
         elif stripped.startswith("- ") or stripped.startswith("* "):
             pdf.set_font("Helvetica", "", 9)
             pdf.set_text_color(203, 213, 225)
             clean = _re.sub(r'\*\*(.*?)\*\*', r'\1', stripped[2:])
             pdf.cell(5)
-            pdf.multi_cell(0, 5, f"  {clean}")
+            pdf.multi_cell(0, 5, _safe(f"  {clean}"))
         elif stripped:
             pdf.set_font("Helvetica", "", 9)
             pdf.set_text_color(203, 213, 225)
             clean = _re.sub(r'\*\*(.*?)\*\*', r'\1', stripped)
-            pdf.multi_cell(0, 5, clean)
+            pdf.multi_cell(0, 5, _safe(clean))
 
     fp = _tmp.NamedTemporaryFile(delete=False, suffix=".pdf")
     pdf.output(fp.name)
