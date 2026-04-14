@@ -4425,9 +4425,29 @@ with tab_cli:
                 _notas_summary = []
                 for cli, lotes in sorted(_notas_interno.items()):
                     medias = [l["media_interna"] for l in lotes]
+                    # Total de notas do cliente no período
+                    _total_notas_cli = int(notas_cli_dates[notas_cli_dates["nome_cliente"] == cli]["numero_nota"].nunique())
+                    _n_lotes = len(lotes)
+                    _notas_usadas = _n_lotes * 4
+                    _notas_restantes = _total_notas_cli - _notas_usadas
+                    # Datas de primeiro e último faturamento
+                    _datas_cli = notas_cli_dates[notas_cli_dates["nome_cliente"] == cli]["emissao"].sort_values()
+                    _primeira_nota = _datas_cli.iloc[0].strftime("%d/%m/%Y") if len(_datas_cli) > 0 else "?"
+                    _ultima_nota = _datas_cli.iloc[-1].strftime("%d/%m/%Y") if len(_datas_cli) > 0 else "?"
+                    # Dias entre primeira e última nota
+                    _span_dias = (_datas_cli.iloc[-1] - _datas_cli.iloc[0]).days if len(_datas_cli) > 1 else 0
+                    # Última nota vs hoje (inatividade)
+                    _dias_sem_nota = (pd.Timestamp.now() - _datas_cli.iloc[-1]).days if len(_datas_cli) > 0 else 0
+
                     _notas_summary.append(
-                        f"  - {cli}: {len(lotes)} lotes, medias internas (dias): {medias}, "
-                        f"media geral: {round(np.mean(medias), 1)} dias"
+                        f"  CLIENTE: {cli}\n"
+                        f"    - Total de notas no periodo: {_total_notas_cli}\n"
+                        f"    - Lotes completos de 4: {_n_lotes} ({_notas_usadas} notas usadas, {_notas_restantes} restantes)\n"
+                        f"    - Medias internas por lote (dias): {medias}\n"
+                        f"    - Media geral dos lotes: {round(np.mean(medias), 1)} dias\n"
+                        f"    - Primeira nota: {_primeira_nota} | Ultima nota: {_ultima_nota}\n"
+                        f"    - Amplitude total: {_span_dias} dias entre primeira e ultima nota\n"
+                        f"    - Dias sem nova nota (desde ultima): {_dias_sem_nota} dias\n"
                     )
                 ctx = (
                     "ANALISE: Media Interna de Dias por Lote de 4 NOTAS — por Cliente\n"
@@ -4436,10 +4456,24 @@ with tab_cli:
                     "Dentro de cada lote, sao calculados os 3 intervalos internos (1a->2a nota, "
                     "2a->3a nota, 3a->4a nota) e tirada a media em dias. "
                     "Isso mede a REGULARIDADE de faturamento do cliente.\n\n"
-                    "DADOS POR CLIENTE:\n" + "\n".join(_notas_summary) + "\n\n"
-                    "INSTRUCAO: Analise a regularidade de cada cliente. Clientes com medias internas "
-                    "baixas e estaveis sao mais regulares. Medias altas ou crescentes indicam "
-                    "irregularidade ou perda de ritmo. Compare os clientes entre si."
+                    "ALERTA CRITICO — VOLUME vs REGULARIDADE:\n"
+                    "Uma media interna BAIXA (poucos dias entre notas) NAO significa necessariamente "
+                    "um bom cliente. E ESSENCIAL cruzar a media com:\n"
+                    "1. QUANTIDADE TOTAL de notas — poucos faturamentos (ex: apenas 4-8 notas) podem "
+                    "   gerar uma media baixa artificialmente, pois o cliente faturou rapido em um "
+                    "   periodo curto e depois PAROU.\n"
+                    "2. AMPLITUDE TEMPORAL — se o cliente tem 4 notas em 15 dias mas nenhuma nos "
+                    "   ultimos 60 dias, ele NAO e regular, apenas fez compras concentradas.\n"
+                    "3. DIAS SEM NOVA NOTA — quanto tempo faz desde a ultima nota? Se faz muitos dias, "
+                    "   o cliente pode estar inativo apesar de ter uma media interna baixa.\n"
+                    "4. NOTAS RESTANTES — se o total de notas nao completa outro lote de 4, existem "
+                    "   notas 'orfas' que nao entraram na media.\n\n"
+                    "DADOS POR CLIENTE:\n\n" + "\n".join(_notas_summary) + "\n\n"
+                    "INSTRUCAO: Para CADA cliente, analise a regularidade MAS contextualize com o volume "
+                    "total de notas e a amplitude temporal. Um cliente com media interna de 5 dias mas "
+                    "apenas 4 notas em 2 semanas e MUITO DIFERENTE de um com media de 10 dias mas 20 "
+                    "notas ao longo de 6 meses. Destaque clientes que parecem bons pela media mas "
+                    "que na verdade pararam de comprar ou tiveram poucas transacoes."
                 )
                 return ctx
             _ia_button("Análise IA — Média Interna por Lote de 4 Notas",
@@ -4485,9 +4519,29 @@ with tab_cli:
                 _ped_summary = []
                 for cli, lotes in sorted(_ped_interno.items()):
                     medias = [l["media_interna"] for l in lotes]
+                    # Total de pedidos do cliente no período
+                    _total_ped_cli = int(pedidos_dates[pedidos_dates["nome_cliente"] == cli]["pedido_clean"].nunique())
+                    _n_lotes = len(lotes)
+                    _ped_usados = _n_lotes * 4
+                    _ped_restantes = _total_ped_cli - _ped_usados
+                    # Datas de primeiro e último pedido
+                    _datas_cli = pedidos_dates[pedidos_dates["nome_cliente"] == cli]["emissao"].sort_values()
+                    _primeiro_ped = _datas_cli.iloc[0].strftime("%d/%m/%Y") if len(_datas_cli) > 0 else "?"
+                    _ultimo_ped = _datas_cli.iloc[-1].strftime("%d/%m/%Y") if len(_datas_cli) > 0 else "?"
+                    # Dias entre primeiro e último pedido
+                    _span_dias = (_datas_cli.iloc[-1] - _datas_cli.iloc[0]).days if len(_datas_cli) > 1 else 0
+                    # Último pedido vs hoje (inatividade)
+                    _dias_sem_ped = (pd.Timestamp.now() - _datas_cli.iloc[-1]).days if len(_datas_cli) > 0 else 0
+
                     _ped_summary.append(
-                        f"  - {cli}: {len(lotes)} lotes, medias internas (dias): {medias}, "
-                        f"media geral: {round(np.mean(medias), 1)} dias"
+                        f"  CLIENTE: {cli}\n"
+                        f"    - Total de pedidos no periodo: {_total_ped_cli}\n"
+                        f"    - Lotes completos de 4: {_n_lotes} ({_ped_usados} pedidos usados, {_ped_restantes} restantes)\n"
+                        f"    - Medias internas por lote (dias): {medias}\n"
+                        f"    - Media geral dos lotes: {round(np.mean(medias), 1)} dias\n"
+                        f"    - Primeiro pedido: {_primeiro_ped} | Ultimo pedido: {_ultimo_ped}\n"
+                        f"    - Amplitude total: {_span_dias} dias entre primeiro e ultimo pedido\n"
+                        f"    - Dias sem novo pedido (desde ultimo): {_dias_sem_ped} dias\n"
                     )
                 ctx = (
                     "ANALISE: Media Interna de Dias por Lote de 4 PEDIDOS — por Cliente\n"
@@ -4496,11 +4550,24 @@ with tab_cli:
                     "Dentro de cada lote, sao calculados os 3 intervalos internos (1o->2o pedido, "
                     "2o->3o pedido, 3o->4o pedido) e tirada a media em dias. "
                     "Isso mede a REGULARIDADE de pedidos do cliente.\n\n"
-                    "DADOS POR CLIENTE:\n" + "\n".join(_ped_summary) + "\n\n"
-                    "INSTRUCAO: Analise a regularidade de pedidos de cada cliente. Clientes com "
-                    "medias internas baixas e estaveis fazem pedidos com mais frequencia e regularidade. "
-                    "Medias altas ou crescentes indicam que o cliente esta espacando os pedidos. "
-                    "Compare os clientes entre si e sugira acoes comerciais."
+                    "ALERTA CRITICO — VOLUME vs REGULARIDADE:\n"
+                    "Uma media interna BAIXA (poucos dias entre pedidos) NAO significa necessariamente "
+                    "um bom cliente. E ESSENCIAL cruzar a media com:\n"
+                    "1. QUANTIDADE TOTAL de pedidos — poucos pedidos (ex: apenas 4-8) podem gerar "
+                    "   uma media baixa artificialmente, pois o cliente pediu rapido em um periodo "
+                    "   curto e depois PAROU.\n"
+                    "2. AMPLITUDE TEMPORAL — se o cliente tem 4 pedidos em 10 dias mas nenhum nos "
+                    "   ultimos 45 dias, ele NAO e regular, apenas fez pedidos concentrados.\n"
+                    "3. DIAS SEM NOVO PEDIDO — quanto tempo faz desde o ultimo pedido? Se faz muitos "
+                    "   dias, o cliente pode estar inativo apesar de ter uma media interna baixa.\n"
+                    "4. PEDIDOS RESTANTES — se o total de pedidos nao completa outro lote de 4, "
+                    "   existem pedidos 'orfaos' que nao entraram na media.\n\n"
+                    "DADOS POR CLIENTE:\n\n" + "\n".join(_ped_summary) + "\n\n"
+                    "INSTRUCAO: Para CADA cliente, analise a regularidade MAS contextualize com o "
+                    "volume total de pedidos e a amplitude temporal. Um cliente com media interna de "
+                    "3 dias mas apenas 4 pedidos em 2 semanas e MUITO DIFERENTE de um com media de "
+                    "8 dias mas 16 pedidos ao longo de 4 meses. Destaque clientes que parecem bons "
+                    "pela media mas que na verdade pararam de comprar ou tiveram poucas transacoes."
                 )
                 return ctx
             _ia_button("Análise IA — Média Interna por Lote de 4 Pedidos",
