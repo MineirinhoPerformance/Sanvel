@@ -4,3 +4,4 @@ plotly>=5.18.0
 openpyxl>=3.1.0
 numpy>=1.26.0
 python-dotenv
+openai==1.30.1
