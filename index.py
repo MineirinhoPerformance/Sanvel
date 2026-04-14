@@ -1245,7 +1245,9 @@ def build_client_benchmark(df_b):
     kg_l = cs["kg_total"].tolist()
     top5 = cs.nlargest(5, "kg_total")[["nome_cliente", "kg_total"]].to_dict("records")
     return {
-        "n_clientes_base": len(cs),
+        "n_clientes_filtrados": len(cs),
+        "descricao_benchmark": "Media de KG faturados por cliente nos dados filtrados (KG Totais Filtrados / N Clientes Filtrados)",
+        "kg_media_por_cliente": round(float(cs["kg_total"].sum()) / len(cs), 2) if len(cs) > 0 else 0.0,
         "kg_media_base": _ai_mean(kg_l),
         "kg_mediana_base": _ai_median(kg_l),
         "kg_top5_min": round(sorted(kg_l, reverse=True)[min(4, len(kg_l) - 1)], 1),
@@ -1273,9 +1275,10 @@ def build_ai_context(analysis_type, chart_name, df_f, df_b, df_r, periodo=None, 
         },
     }
 
-    # Benchmark sempre sobre df_r (dados brutos sem filtros) para que a comparação
-    # seja contra toda a base, independente dos filtros ativos no dashboard
-    bm = build_client_benchmark(df_r)
+    # Benchmark calculado sobre df_f (dados FILTRADOS do relatório) para garantir
+    # coerência: apenas registros visíveis no dashboard são considerados.
+    # Fórmula: KG Totais Filtrados / N° Clientes Filtrados
+    bm = build_client_benchmark(df_f)
     ctx["benchmark_base"] = bm
 
     # ── Semanal ───────────────────────────────────────────────────────────────
@@ -1303,9 +1306,9 @@ def build_ai_context(analysis_type, chart_name, df_f, df_b, df_r, periodo=None, 
             "tendencia_dir":     "crescimento" if slope > 0 else "queda" if slope < 0 else "estavel",
         }
         ctx["vs_base"] = {
-            "media_base": bm.get("kg_media_base"),
-            "relacao_pct": round((ctx["metricas"]["kg_media_semana"] / bm["kg_media_base"] - 1) * 100, 1)
-                           if bm.get("kg_media_base") else None,
+            "media_kg_por_cliente_filtrado": bm.get("kg_media_por_cliente"),
+            "n_clientes_filtrados": bm.get("n_clientes_filtrados"),
+            "descricao": "Media de KG faturados por cliente nos dados filtrados (KG Totais / N Clientes)",
         }
 
     # ── Cliente ───────────────────────────────────────────────────────────────
@@ -1577,10 +1580,11 @@ _AI_PRECALC_NOTICE = (
     "\nPara CADA metrica que voce citar na analise, inclua entre parenteses uma explicacao curta do que ela significa "
     "e como interpretar o valor. Parta do principio que o leitor NAO tem conhecimento de estatistica.\n"
     "\nREGRA OBRIGATORIA DE COMPARACAO COM A BASE:\n"
-    "Quando comparar o cliente com a base (benchmark), voce DEVE SEMPRE informar o valor exato da base entre parenteses. "
-    "NUNCA diga apenas 'acima da base' ou 'abaixo da base' sem informar qual e o valor da base.\n"
+    "Quando comparar o cliente com a base (benchmark), voce DEVE SEMPRE informar o valor exato e a formula entre parenteses. "
+    "NUNCA diga apenas 'acima da base' ou 'abaixo da base' sem informar qual e o valor e o que ele representa.\n"
+    "O benchmark e sempre calculado sobre os DADOS FILTRADOS do relatorio (campo 'kg_media_por_cliente'): Media de KG Faturados por Cliente = KG Totais Filtrados / N Clientes Filtrados.\n"
     "Exemplos CORRETOS:\n"
-    "  - 'Volume 20% acima da media da base (base = 1.500,0 kg)'\n"
+    "  - 'Volume 20% acima da media de KG por cliente nos dados filtrados (media = 1.500,0 kg — KG Totais Filtrados / N Clientes Filtrados)'\n"
     "  - 'Frequencia 15% abaixo da mediana da base (base = 12,0 pedidos)'\n"
     "  - 'Recorrencia superior a media da base (base = 65,0%)'\n"
     "Exemplos INCORRETOS (NUNCA faca assim):\n"
@@ -1749,7 +1753,7 @@ _SYSTEM_COMMERCIAL = (
     "- Concentracao >50% em 1 pedido = risco; >70% = risco critico\n"
     "- CV >60% = alta variabilidade/sazonalidade potencial (confirme se padrao se repete)\n"
     "- Pico isolado NAO e tendencia de crescimento - exija consistencia\n"
-    "- Compare SEMPRE com benchmark_base (calculado sobre TODA a base, sem filtros) e top5_clientes\n"
+    "- Compare SEMPRE com benchmark_base (calculado sobre os dados FILTRADOS do relatorio: Media de KG Faturados por Cliente = KG Totais Filtrados / N Clientes Filtrados — use o campo 'kg_media_por_cliente' com sua descricao explicita) e top5_clientes\n"
     "- Bonificacoes (ACAO/CFOP 5910) nao entram nos pedidos — ja foram excluidas dos dados\n"
     "- A taxa de recorrencia e calculada desde o 1o faturamento do cliente, nao desde o inicio do periodo\n"
     "- Toda conclusao deve ter base numerica explicita\n"
@@ -3868,8 +3872,10 @@ with tab_cli:
 
     _cli_stats_individual["tendencia_kg_sem"] = _cli_stats_individual["nome_cliente"].map(_cli_trends).fillna(0.0)
 
-    # Média geral da base para comparação
-    _media_base_kg_sem = df["kilos"].sum() / df["semana_sort"].nunique() if df["semana_sort"].nunique() > 0 else 0
+    # Média de KG faturados por cliente nos dados filtrados
+    # Fórmula: KG Totais Filtrados / N° Clientes Filtrados
+    _n_cli_filtrado = df["nome_cliente"].nunique()
+    _media_kg_por_cliente = df["kilos"].sum() / _n_cli_filtrado if _n_cli_filtrado > 0 else 0
 
     # Botão de análise individual por cliente
     def _ctx_cli_individual():
@@ -3888,8 +3894,8 @@ with tab_cli:
                 f"    - Pedidos: {row['n_pedidos']} | Depositos: {row['n_depositos']}\n"
                 f"    - Media kg/sem: {row['kg_sem']:.1f} | Media cx/sem: {row['cx_sem']:.1f}\n"
                 f"    - Tendencia semanal kg: {row['tendencia_kg_sem']:.2f} kg/sem ({trend_desc})\n"
-                f"    - Comparacao com base: media cliente ({row['kg_sem']:.1f} kg/sem) vs "
-                f"media geral ({_media_base_kg_sem / _cli_stats_individual['nome_cliente'].nunique():.1f} kg/sem por cliente)\n"
+                f"    - Comparacao com benchmark (dados filtrados): total kg cliente ({row['total_kg']:.1f} kg) vs "
+                f"media de KG faturados por cliente nos dados filtrados ({_media_kg_por_cliente:.1f} kg/cliente) [Formula: KG Totais Filtrados / N Clientes Filtrados]\n"
             )
 
         ctx = (
@@ -3902,7 +3908,8 @@ with tab_cli:
             "diversificacao de produtos)\n"
             "3. ACOES RECOMENDADAS: Medidas especificas a serem tomadas pela equipe comercial para "
             "este cliente\n\n"
-            f"MEDIA GERAL DA BASE: {_media_base_kg_sem:.1f} kg/sem (todos os clientes somados)\n"
+            f"MEDIA DE KG POR CLIENTE (DADOS FILTRADOS): {_media_kg_por_cliente:.1f} kg/cliente "
+            f"[Formula: KG Totais Filtrados / N Clientes Filtrados = {df['kilos'].sum():.1f} kg / {_n_cli_filtrado} clientes]\n"
             f"TOTAL DE CLIENTES: {len(_cli_stats_individual)}\n\n"
             "DADOS POR CLIENTE:\n\n" + "\n".join(cli_lines) + "\n\n"
             "FORMATO DE SAIDA: Use secoes claras separadas por cliente. Para cada cliente use:\n"
