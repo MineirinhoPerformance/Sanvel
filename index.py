@@ -529,10 +529,12 @@ def load_data(base_file_bytes: bytes):
     wk_map = wk_range.set_index("semana_sort")["date_range"].to_dict()
     df["date_range"] = df["semana_sort"].map(wk_map)
 
-    # Pedido cliente
+    # Pedido cliente — exclui bonificações (AÇÃO...) que não são compras reais
     df["pedido_clean"] = df["pedido_cliente"].astype(str).str.strip()
-    df["tem_pedido"]   = df["pedido_clean"].apply(
-        lambda x: x not in ["", "nan", "NaN", "None", " "]
+    df["tem_pedido"]   = (
+        df["pedido_clean"].apply(lambda x: x not in ["", "nan", "NaN", "None", " "])
+        & ~df["pedido_clean"].str.startswith("AÇÃO", na=False)
+        & (df["transacao_produto"] != 5910)
     )
 
     return df, wk_map
@@ -1076,6 +1078,32 @@ for col, (accent, icon, label, val, sub) in zip(avg_cols, avg_kpis):
         unsafe_allow_html=True,
     )
 
+# ── EXPLICAÇÃO DA MÉDIA DA BASE ───────────────────────────────────────────────
+_avg_cx_sem = total_cx / n_semanas if n_semanas else 0
+_avg_un_sem = total_un / n_semanas if n_semanas else 0
+st.markdown(
+    f"<details style='margin-bottom:12px'>"
+    f"<summary style='font-size:.72rem;color:{C_CYAN};cursor:pointer;font-weight:600'>"
+    f"📐 Como as médias acima são calculadas? (clique para expandir)</summary>"
+    f"<div style='font-size:.72rem;color:{TXT_S};padding:10px 14px;line-height:1.7;"
+    f"background:{BG_CARD};border:1px solid {BORDER};border-radius:8px;margin-top:6px'>"
+    f"<b style='color:{TXT_H}'>Fórmula:</b> Total no período ÷ Número de semanas no período<br><br>"
+    f"<b style='color:{C_CYAN}'>Média Kg/Sem:</b> {fmt_br(total_kg, 1)} kg ÷ {n_semanas} semanas = "
+    f"<b>{fmt_br(avg_kg_sem, 1)} kg/sem</b><br>"
+    f"<b style='color:{C_TEAL}'>Média Cx/Sem:</b> {fmt_br(total_cx, 1)} cx ÷ {n_semanas} semanas = "
+    f"<b>{fmt_br(_avg_cx_sem, 1)} cx/sem</b><br>"
+    f"<b style='color:{C_AMBER}'>Média Un/Sem:</b> {fmt_br(total_un, 0)} un ÷ {n_semanas} semanas = "
+    f"<b>{fmt_br(_avg_un_sem, 0)} un/sem</b><br><br>"
+    f"<span style='color:{TXT_S};font-size:.68rem'>"
+    f"<b>Origem dos dados:</b> O total de cada métrica (kilos, caixas, unidades) é a soma de todos os "
+    f"registros filtrados no período selecionado. O número de semanas ({n_semanas}) conta as semanas "
+    f"distintas em que houve pelo menos um registro nos dados filtrados. "
+    f"Semanas sem faturamento dentro do intervalo <b>não</b> são contadas, ou seja, "
+    f"a média reflete apenas semanas ativas.</span>"
+    f"</div></details>",
+    unsafe_allow_html=True,
+)
+
 st.markdown("<br>", unsafe_allow_html=True)
 
 
@@ -1163,11 +1191,12 @@ def _ai_slope(vals):
 
 def _calc_viability_score(freq_s, rec_s, vol_s, avg_vol_s, trend_s,
                            conc_pen, first_pen, seas_pen):
-    # Score 0-100: frequencia*0.25 + recorrencia*0.20 + volume*0.15
-    # vol_medio*0.10 + tendencia*0.10 - concentracao*0.10
+    # Score 0-100: pesos positivos somam exatamente 100%
+    # frequencia*0.30 + recorrencia*0.25 + volume*0.20
+    # vol_medio*0.125 + tendencia*0.125 - concentracao*0.10
     # primeiro_pedido*0.10 - sazonalidade*0.10
-    raw = (freq_s * 0.25 + rec_s * 0.20 + vol_s * 0.15 + avg_vol_s * 0.10
-           + trend_s * 0.10 - conc_pen * 0.10 - first_pen * 0.10 - seas_pen * 0.10)
+    raw = (freq_s * 0.30 + rec_s * 0.25 + vol_s * 0.20 + avg_vol_s * 0.125
+           + trend_s * 0.125 - conc_pen * 0.10 - first_pen * 0.10 - seas_pen * 0.10)
     return max(0, min(100, round(raw)))
 
 def _score_label(score):
@@ -1244,7 +1273,9 @@ def build_ai_context(analysis_type, chart_name, df_f, df_b, df_r, periodo=None, 
         },
     }
 
-    bm = build_client_benchmark(df_b)
+    # Benchmark sempre sobre df_r (dados brutos sem filtros) para que a comparação
+    # seja contra toda a base, independente dos filtros ativos no dashboard
+    bm = build_client_benchmark(df_r)
     ctx["benchmark_base"] = bm
 
     # ── Semanal ───────────────────────────────────────────────────────────────
@@ -1316,12 +1347,15 @@ def build_ai_context(analysis_type, chart_name, df_f, df_b, df_r, periodo=None, 
             conc1 = _ai_conc_top1(kg_ped_s) if kg_ped_s else 0.0
             hhi   = _ai_conc_hhi(kg_ped_s)  if kg_ped_s else 0.0
 
-            # Taxa de recorrencia: semanas ativas / total de semanas no periodo
-            # Usa ALL_RANGE_SORTS para considerar TODAS as semanas do periodo,
-            # incluindo semanas sem faturamento (que indicam inatividade)
-            n_sem_t  = len(ALL_RANGE_SORTS) if ALL_RANGE_SORTS else len(kg_s)
+            # Taxa de recorrencia: semanas ativas / semanas desde o 1o faturamento
+            # Evita penalizar clientes novos pelas semanas antes de sua entrada no periodo
             _cli_weeks_active = set(wk_c["semana_sort"].tolist())
             n_sem_a  = len(_cli_weeks_active)
+            if _cli_weeks_active and ALL_RANGE_SORTS:
+                _primeira_sem = min(_cli_weeks_active)
+                n_sem_t = len([s for s in ALL_RANGE_SORTS if s >= _primeira_sem])
+            else:
+                n_sem_t = len(ALL_RANGE_SORTS) if ALL_RANGE_SORTS else max(len(kg_s), 1)
             rec_pct  = round(n_sem_a / n_sem_t * 100, 1) if n_sem_t else 0.0
             cv_kg    = _ai_cv(kg_s)
             saz_flag = cv_kg > 60
@@ -1340,7 +1374,7 @@ def build_ai_context(analysis_type, chart_name, df_f, df_b, df_r, periodo=None, 
             vol_s  = min(100, round(kg_tot / bm["kg_media_base"] * 50)) if bm.get("kg_media_base") else 50
             avg_s  = min(100, round(_ai_mean(kg_ped_s) / max(
                         bm.get("kg_media_base", 1) / max(bm.get("pedidos_media_base", 1), 1), 1) * 50))
-            tr_s   = 80 if slope > 0 else 50 if slope == 0 else max(0, 50 + slope)
+            tr_s   = 100 if slope > 0 else 50 if slope == 0 else max(0, 50 + slope)
             cp     = 100 if conc1 > 70 else 50 if conc1 > 50 else 0
             fp     = min(100, round(infl_ratio * 30)) if infl_flag else 0
             sp     = min(100, round((cv_kg - 60) * 1.5)) if saz_flag else 0
@@ -1687,16 +1721,19 @@ _METRIC_LEGENDS = [
     },
     {
         "nome": "Score de Viabilidade (0-100)",
-        "formula": "Pontuacao composta: Frequencia(25%) + Recorrencia(20%) + Volume(15%) + Vol.Medio(10%) + Tendencia(10%) - Concentracao(10%) - 1o Pedido Inflado(10%) - Sazonalidade(10%)",
+        "formula": "Pontuacao composta: Frequencia(30%) + Recorrencia(25%) + Volume(20%) + Vol.Medio(12,5%) + Tendencia(12,5%) - Concentracao(10%) - 1o Pedido Inflado(10%) - Sazonalidade(10%)",
         "explicacao": (
             "Indice calculado automaticamente que resume a viabilidade comercial de um cliente em um unico numero. "
-            "Combina fatores positivos (frequencia, recorrencia, volume, tendencia) com penalidades (concentracao, primeiro pedido inflado, sazonalidade)."
+            "Os fatores positivos somam exatamente 100%, garantindo que um cliente com desempenho maximo em todos eles "
+            "atinja o score 100. As penalidades podem reduzir o score em ate 30 pontos. "
+            "Bonificacoes (ACAO/CFOP 5910) nao sao contadas como pedidos. "
+            "A recorrencia e calculada desde a primeira semana com faturamento do cliente, nao desde o inicio do periodo."
         ),
         "como_interpretar": (
-            "80-100 = Cliente Estrategico (prioridade maxima). "
+            "80-100 = Cliente Estrategico (prioridade maxima — frequencia alta, volume consistente, tendencia positiva). "
             "60-79 = Cliente Relevante (manter e expandir). "
-            "40-59 = Cliente Oportunista (avaliar potencial). "
-            "0-39 = Cliente de Baixo Valor (revisar estrategia)."
+            "40-59 = Cliente Oportunista (avaliar potencial de fidelizacao). "
+            "0-39 = Cliente de Baixo Valor (revisar estrategia comercial)."
         ),
     },
 ]
@@ -1712,18 +1749,23 @@ _SYSTEM_COMMERCIAL = (
     "- Concentracao >50% em 1 pedido = risco; >70% = risco critico\n"
     "- CV >60% = alta variabilidade/sazonalidade potencial (confirme se padrao se repete)\n"
     "- Pico isolado NAO e tendencia de crescimento - exija consistencia\n"
-    "- Compare SEMPRE com benchmark_base e top5_clientes\n"
+    "- Compare SEMPRE com benchmark_base (calculado sobre TODA a base, sem filtros) e top5_clientes\n"
+    "- Bonificacoes (ACAO/CFOP 5910) nao entram nos pedidos — ja foram excluidas dos dados\n"
+    "- A taxa de recorrencia e calculada desde o 1o faturamento do cliente, nao desde o inicio do periodo\n"
     "- Toda conclusao deve ter base numerica explicita\n"
     "- Nao use 'monitorar' sem uma acao especifica e mensuravel\n\n"
+    "FORMULA DO SCORE (pesos corrigidos — positivos somam 100%):\n"
+    "  Frequencia(30%) + Recorrencia(25%) + Volume(20%) + Vol.Medio(12,5%) + Tendencia(12,5%)\n"
+    "  - Concentracao(-10%) - 1o Pedido Inflado(-10%) - Sazonalidade(-10%)\n\n"
     "FORMATO OBRIGATORIO (markdown, portugues brasileiro, numeros no formato BR):\n"
     "### Resumo Executivo\n"
     "(2-3 frases com a conclusao principal - responda direto se o cliente vale a pena)\n\n"
     "### Diagnostico Quantitativo\n"
     "(frequencia, recorrencia, volume, variabilidade - com numeros)\n\n"
     "### Frequencia e Recorrencia\n"
-    "(intervalo medio entre pedidos, taxa de recorrencia, semanas ativas vs. total)\n\n"
+    "(intervalo medio entre pedidos, taxa de recorrencia desde o 1o faturamento, semanas ativas)\n\n"
     "### Comparacao com a Base\n"
-    "(vs. media da base, mediana, top 5 - com percentuais explicitos)\n\n"
+    "(vs. media da base COMPLETA, mediana, top 5 - com percentuais explicitos)\n\n"
     "### Riscos e Distorcoes\n"
     "(primeiro pedido inflado? concentracao? sazonalidade? outliers?)\n\n"
     "### Ciclo de Vida e Tendencia\n"
@@ -1779,12 +1821,20 @@ _CHART_SPECIFIC_INSTRUCTIONS = {
     ),
     "deposito": (
         "FOCO DESTA ANALISE: Distribuicao por DEPOSITO/FILIAL.\n"
+        "CONTEXTO IMPORTANTE: A escolha do deposito e definida automaticamente com base no ENDERECO "
+        "do cliente (proximidade geografica). Isso NAO e gerenciavel pela equipe comercial — "
+        "o cliente e atendido pelo deposito mais proximo. Portanto, a analise NAO deve sugerir "
+        "'redistribuir clientes entre depositos' ou 'migrar clientes para outro deposito', pois "
+        "isso nao e uma decisao comercial viavel.\n"
+        "A analise deve focar nos DADOS CONSOLIDADOS, abstraindo as diferencas entre depositos. "
+        "Por exemplo, comparar a media geral consolidada, identificar tendencias de volume total, "
+        "e avaliar se o crescimento ou queda e uniforme entre os depositos ou concentrado em algum.\n"
         "Voce esta analisando depositos. Concentre-se em:\n"
-        "- Dependencia de um deposito especifico\n"
-        "- Distribuicao do volume entre depositos\n"
-        "- Evolucao temporal por deposito\n"
-        "- Riscos de concentracao logistica\n"
-        "NAO analise clientes ou produtos — foque nos depositos."
+        "- Volume consolidado total e sua evolucao temporal\n"
+        "- Comparacao entre depositos como reflexo da distribuicao geografica dos clientes\n"
+        "- Tendencias de crescimento ou queda por deposito (indicando mudancas na base de clientes da regiao)\n"
+        "- Concentracao do volume (poucos depositos concentram a maior parte?)\n"
+        "NAO sugira redistribuicao de clientes entre depositos — isso e definido por proximidade geografica."
     ),
     "pedido": (
         "FOCO DESTA ANALISE: Padrao e consistencia de PEDIDOS.\n"
@@ -1944,7 +1994,8 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
             pdf.set_font("Helvetica", "", 7)
             pdf.set_text_color(*_TEXT)
             pdf.multi_cell(0, 3.5, _safe(
-                "Indice de 0 a 100 calculado automaticamente com base em 8 fatores ponderados:"
+                "Indice de 0 a 100 calculado automaticamente com base em 8 fatores ponderados "
+                "(positivos somam exatamente 100%, penalidades descontam ate 30 pontos):"
             ))
             pdf.ln(1)
             pdf.set_font("Helvetica", "B", 7)
@@ -1953,11 +2004,11 @@ def _generate_pdf(analysis_md: str, chart_name: str, scores_info=None,
             pdf.set_font("Helvetica", "", 6.5)
             pdf.set_text_color(*_TEXT)
             for _item in [
-                "Frequencia de compra (25%) - intervalo entre pedidos",
-                "Recorrencia (20%) - % de semanas ativas no periodo",
-                "Volume total (15%) - kg vs media da base",
-                "Volume medio/pedido (10%) - consistencia",
-                "Tendencia (10%) - crescimento ou queda",
+                "Frequencia de compra (30%) - intervalo entre pedidos",
+                "Recorrencia (25%) - % de semanas ativas desde o 1o faturamento",
+                "Volume total (20%) - kg vs media da base",
+                "Volume medio/pedido (12,5%) - consistencia",
+                "Tendencia (12,5%) - crescimento ou queda",
             ]:
                 pdf.set_x(pdf.l_margin + 5)
                 pdf.multi_cell(0, 3, _safe(f"  * {_item}"))
@@ -2283,11 +2334,11 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
             f"O <b style='color:{TXT_H}'>Score de Viabilidade</b> e um indice de 0 a 100 calculado "
             f"automaticamente pelo sistema com base em <b>8 fatores ponderados</b>:<br><br>"
             f"<b style='color:{C_GREEN}'>Fatores positivos (somam pontos):</b><br>"
-            f"&bull; <b>Frequencia de compra (25%)</b> — quanto menor o intervalo entre pedidos, maior a pontuacao<br>"
-            f"&bull; <b>Recorrencia (20%)</b> — percentual de semanas em que o cliente esteve ativo no periodo<br>"
-            f"&bull; <b>Volume total (15%)</b> — volume em kg comparado com a media da base<br>"
-            f"&bull; <b>Volume medio por pedido (10%)</b> — consistencia no tamanho das compras<br>"
-            f"&bull; <b>Tendencia (10%)</b> — se o volume esta crescendo, estavel ou caindo<br><br>"
+            f"&bull; <b>Frequencia de compra (30%)</b> — quanto menor o intervalo entre pedidos, maior a pontuacao<br>"
+            f"&bull; <b>Recorrencia (25%)</b> — % de semanas ativas desde o 1o faturamento do cliente<br>"
+            f"&bull; <b>Volume total (20%)</b> — volume em kg comparado com a media da base completa<br>"
+            f"&bull; <b>Volume medio por pedido (12,5%)</b> — consistencia no tamanho das compras<br>"
+            f"&bull; <b>Tendencia (12,5%)</b> — se o volume esta crescendo, estavel ou caindo<br><br>"
             f"<b style='color:{C_RED}'>Penalidades (reduzem pontos):</b><br>"
             f"&bull; <b>Concentracao (-10%)</b> — se mais de 50% do volume esta em um unico pedido<br>"
             f"&bull; <b>Primeiro pedido inflado (-10%)</b> — se o 1o pedido foi 2x maior que os demais (possivel formacao de estoque)<br>"
@@ -2341,6 +2392,130 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
         unsafe_allow_html=True,
     )
 
+    # ── Gráficos explicativos de métricas calculadas pelo sistema ─────────────
+    # Extrai métricas estatísticas do contexto JSON para visualização
+    _stats_to_show = {}
+    if isinstance(_ctx_parsed, dict):
+        # Coleta métricas de nível raiz
+        for _mk in ["media_kg_semana", "mediana_kg_semana", "desvio_padrao_kg",
+                     "cv_percent", "slope_kg_semana", "hhi", "conc_top1_percent"]:
+            if _mk in _ctx_parsed:
+                _stats_to_show[_mk] = _ctx_parsed[_mk]
+        # Coleta métricas do benchmark
+        if "benchmark" in _ctx_parsed and isinstance(_ctx_parsed["benchmark"], dict):
+            for _bk, _bv in _ctx_parsed["benchmark"].items():
+                _stats_to_show[f"bench_{_bk}"] = _bv
+        # Coleta métricas por cliente
+        if "clientes" in _ctx_parsed and isinstance(_ctx_parsed["clientes"], list):
+            for _cli_data in _ctx_parsed["clientes"]:
+                if isinstance(_cli_data, dict):
+                    for _ck in ["media_kg_semana", "mediana_kg_semana", "desvio_padrao_kg",
+                                "cv_percent", "score_viabilidade"]:
+                        if _ck in _cli_data:
+                            cli_name = _cli_data.get("cliente", "?")
+                            _stats_to_show[f"cli_{cli_name}_{_ck}"] = _cli_data[_ck]
+
+    if _stats_to_show:
+        st.markdown(
+            f"<details style='margin-bottom:14px'>"
+            f"<summary style='font-size:.72rem;color:{C_TEAL};cursor:pointer;font-weight:600'>"
+            f"📊 Metricas Estatisticas Calculadas pelo Sistema (clique para expandir)</summary>"
+            f"<div style='margin-top:8px;font-size:.68rem;color:{TXT_S};margin-bottom:8px'>"
+            f"Os graficos abaixo mostram como as metricas estatisticas foram extraidas dos dados filtrados. "
+            f"Esses valores sao os mesmos utilizados pela IA na analise.</div>",
+            unsafe_allow_html=True,
+        )
+
+        # Gráfico de barras com as métricas principais
+        _metric_names = []
+        _metric_values = []
+        _metric_colors = []
+        _metric_labels_map = {
+            "media_kg_semana": ("Média Kg/Sem", C_CYAN),
+            "mediana_kg_semana": ("Mediana Kg/Sem", C_TEAL),
+            "desvio_padrao_kg": ("Desvio Padrão Kg", C_AMBER),
+            "cv_percent": ("Coef. Variação %", C_ORANGE),
+            "slope_kg_semana": ("Tendência Kg/Sem", C_VIOLET),
+            "hhi": ("HHI (Concentração)", C_RED),
+            "conc_top1_percent": ("Concentração Top 1 %", C_GREEN),
+        }
+        for _mk, (_ml, _mc) in _metric_labels_map.items():
+            if _mk in _stats_to_show:
+                _metric_names.append(_ml)
+                _metric_values.append(float(_stats_to_show[_mk]))
+                _metric_colors.append(_mc)
+
+        if _metric_names:
+            _fig_stats = go.Figure(go.Bar(
+                x=_metric_names,
+                y=_metric_values,
+                marker=dict(color=_metric_colors, line=dict(color=BG_PLOT, width=0.5)),
+                text=[f"{v:,.1f}" for v in _metric_values],
+                textposition="outside",
+                textfont=dict(size=9, color=TXT_H),
+            ))
+            fig_layout(_fig_stats,
+                title=dict(text="Métricas Estatísticas da Base Filtrada"),
+                height=300,
+                margin=dict(t=40, b=40, l=10, r=10),
+                xaxis=dict(tickfont=dict(color=TXT_M, size=9)),
+                yaxis=dict(showgrid=True, gridcolor=GRID, tickfont=dict(color=TXT_S)),
+            )
+            st.plotly_chart(_fig_stats, use_container_width=True, key=f"stats_chart_{chart_name[:20]}")
+
+        # Gráfico por cliente (se houver dados de clientes)
+        _cli_score_names = []
+        _cli_score_vals = []
+        _cli_score_colors = []
+        for _sk, _sv in _stats_to_show.items():
+            if _sk.startswith("cli_") and _sk.endswith("_score_viabilidade"):
+                _cname = _sk.replace("cli_", "").replace("_score_viabilidade", "")
+                _cli_score_names.append(_cname)
+                _cli_score_vals.append(float(_sv))
+                if float(_sv) >= 80:
+                    _cli_score_colors.append(C_GREEN)
+                elif float(_sv) >= 60:
+                    _cli_score_colors.append(C_CYAN)
+                elif float(_sv) >= 40:
+                    _cli_score_colors.append(C_AMBER)
+                else:
+                    _cli_score_colors.append(C_RED)
+
+        if _cli_score_names:
+            _fig_scores = go.Figure(go.Bar(
+                x=_cli_score_names,
+                y=_cli_score_vals,
+                marker=dict(color=_cli_score_colors, line=dict(color=BG_PLOT, width=0.5)),
+                text=[f"{v:.0f}" for v in _cli_score_vals],
+                textposition="outside",
+                textfont=dict(size=9, color=TXT_H),
+            ))
+            fig_layout(_fig_scores,
+                title=dict(text="Score de Viabilidade por Cliente"),
+                height=300,
+                margin=dict(t=40, b=40, l=10, r=10),
+                xaxis=dict(tickfont=dict(color=TXT_M, size=9)),
+                yaxis=dict(showgrid=True, gridcolor=GRID, tickfont=dict(color=TXT_S),
+                           range=[0, 105]),
+            )
+            # Linhas de referência para as faixas
+            for _threshold, _label, _color in [
+                (80, "Estratégico", C_GREEN), (60, "Relevante", C_CYAN),
+                (40, "Oportunista", C_AMBER)
+            ]:
+                _fig_scores.add_hline(y=_threshold, line_dash="dot",
+                    line_color=_color, opacity=0.5,
+                    annotation_text=_label, annotation_position="right",
+                    annotation_font=dict(size=8, color=_color))
+            st.plotly_chart(_fig_scores, use_container_width=True, key=f"scores_chart_{chart_name[:20]}")
+
+        st.markdown("</details>", unsafe_allow_html=True)
+
+    st.markdown(
+        f"<hr style='border-color:{BORDER};margin:6px 0 14px'>",
+        unsafe_allow_html=True,
+    )
+
     # ── Cache e reanálise ─────────────────────────────────────────────────────
     if not _api_key:
         st.warning("OPENAI_API_KEY nao encontrada. Configure no .env e reinicie.")
@@ -2379,11 +2554,31 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
             unsafe_allow_html=True,
         )
     else:
-        _score_val = _pre_scores[0][1] if _pre_scores else 0
-        _sys_prompt = (
-            _SYSTEM_COMMERCIAL.replace("{score}", str(_score_val))
-            if analysis_type == "cliente" else _SYSTEM_GENERAL
-        )
+        # ── Monta o system prompt corretamente para 1 ou N clientes ──────────
+        if analysis_type == "cliente":
+            _n_clientes = len(_pre_scores)
+            if _n_clientes == 1:
+                # Um único cliente: injeta o score dele no placeholder
+                _score_val = _pre_scores[0][1]
+                _sys_prompt = _SYSTEM_COMMERCIAL.replace("{score}", str(_score_val))
+            else:
+                # Múltiplos clientes: substitui o placeholder por instrução genérica
+                # que manda a IA usar o score individual de cada cliente do JSON
+                _multi_score_instr = (
+                    f"Ha {_n_clientes} clientes para analisar. "
+                    "Cada cliente tem seu proprio score_viabilidade no JSON (campo 'score_viabilidade'). "
+                    "Use o score individual de cada cliente — NAO use um score unico para todos."
+                )
+                _sys_prompt = _SYSTEM_COMMERCIAL.replace(
+                    "Score calculado pelo sistema: {score}/100",
+                    "Score calculado pelo sistema: ver campo 'score_viabilidade' de cada cliente no JSON"
+                )
+                # Remove qualquer {score} residual para evitar KeyError/confusao
+                _sys_prompt = _sys_prompt.replace("{score}", "ver JSON")
+                # Adiciona instrucao de multiplos clientes logo no topo do prompt
+                _sys_prompt = _multi_score_instr + "\n\n" + _sys_prompt
+        else:
+            _sys_prompt = _SYSTEM_GENERAL
 
         # Adiciona instrucoes especificas do tipo de grafico
         _chart_instr = _CHART_SPECIFIC_INSTRUCTIONS.get(analysis_type, "")
@@ -2399,12 +2594,32 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
             "volume":   "analise de volume e benchmark por cliente",
         }
         _instruct = _type_labels.get(analysis_type, "analise comercial")
+
+        # ── Mensagem do usuário: reforça análise de TODOS os clientes ────────
+        if analysis_type == "cliente" and len(_pre_scores) > 1:
+            _cli_names = [p[0] for p in _pre_scores]
+            _cli_list_str = "\n".join(f"  - {n}" for n in _cli_names)
+            _multi_header = (
+                f"ATENCAO CRITICA: Ha {len(_pre_scores)} clientes para analisar. "
+                f"Voce DEVE analisar TODOS eles individualmente, um por um, sem excecao:\n"
+                f"{_cli_list_str}\n\n"
+                f"NAO analise apenas o primeiro. NAO agrupe todos em um unico bloco generico. "
+                f"Para CADA cliente, dedique uma secao separada com o nome do cliente como cabecalho.\n\n"
+            )
+        else:
+            _multi_header = ""
+
         _user_msg = (
+            f"{_multi_header}"
             f"Execute um {_instruct} completo para o grafico '{chart_name}'.\n\n"
             f"ATENCAO: Todos os calculos estatisticos abaixo ja foram computados pelo sistema. "
             f"Voce deve APENAS interpretar e comentar os valores. NAO recalcule nada.\n\n"
             f"Dados em JSON estruturado:\n{context_json}"
         )
+
+        # ── Ajusta max_tokens proporcionalmente ao número de clientes ────────
+        _n_clientes_para_tokens = len(_pre_scores) if analysis_type == "cliente" else 1
+        _max_tokens = min(4000 * max(1, _n_clientes_para_tokens), 16000)
 
         with st.spinner("Processando inteligencia comercial..."):
             try:
@@ -2414,7 +2629,7 @@ def _show_ai_analysis(chart_name: str, context_json: str, analysis_type: str = "
                         {"role": "system", "content": _sys_prompt},
                         {"role": "user",   "content": _user_msg},
                     ],
-                    max_tokens=4000,
+                    max_tokens=_max_tokens,
                     temperature=0.15,
                 )
                 _analysis = _resp.choices[0].message.content
@@ -3120,12 +3335,6 @@ with tab_prod:
             xaxis=dict(showgrid=True, gridcolor=GRID),
         )
         ev_prod = st.plotly_chart(fig_prod, use_container_width=True, on_select="rerun", key="chart_prod")
-        def _ctx_rank_prod():
-            return build_ai_context("produto", f"Ranking por Produto",
-                                    df, df_base, df_raw,
-                                    extra={"metrica_rank": metrica_rank})
-        _ia_button(f"Ranking por Produto — {metrica_rank.capitalize()}",
-                   _ctx_rank_prod, "ia_btn_rank_prod", analysis_type="produto")
         if _handle_event(ev_prod, "xf_produto", "y"):
             st.rerun()
 
@@ -3212,12 +3421,6 @@ with tab_prod:
             ),
         )
         st.plotly_chart(fig_cli, use_container_width=True, key="chart_cli")
-        def _ctx_donut():
-            return build_ai_context("produto", "Participacao por Produto",
-                                    df, df_base, df_raw,
-                                    extra={"metrica_rank": metrica_rank})
-        _ia_button("Participacao por Produto",
-                   _ctx_donut, "ia_btn_donut", analysis_type="produto")
 
 
     # ═══════════════════════════════════════════════════════════════════════════════
@@ -3294,28 +3497,36 @@ with tab_prod:
 
     with tab_ev1:
         st.plotly_chart(evolution_lines("kilos",    lambda v: fmt_br(v,1)+"kg",  "Kilos (kg)"),    use_container_width=True)
-        def _ctx_ev_kg():
-            return build_ai_context("produto", "Evolucao Semanal por Produto — Kilos",
-                                    df, df_base, df_raw,
-                                    extra={"metrica_rank": "kilos"})
-        _ia_button("Evolucao Semanal por Produto — Kilos",
-                   _ctx_ev_kg, "ia_btn_ev_kg", analysis_type="produto")
     with tab_ev2:
         st.plotly_chart(evolution_lines("caixas",   lambda v: fmt_br(v,1)+"cx",  "Caixas (cx)"),   use_container_width=True)
-        def _ctx_ev_cx():
-            return build_ai_context("produto", "Evolucao Semanal por Produto — Caixas",
-                                    df, df_base, df_raw,
-                                    extra={"metrica_rank": "caixas"})
-        _ia_button("Evolucao Semanal por Produto — Caixas",
-                   _ctx_ev_cx, "ia_btn_ev_cx", analysis_type="produto")
     with tab_ev3:
         st.plotly_chart(evolution_lines("unidades", lambda v: fmt_br(v,0)+"un",  "Unidades (un)"), use_container_width=True)
-        def _ctx_ev_un():
-            return build_ai_context("produto", "Evolucao Semanal por Produto — Unidades",
+
+    # ── BOTÃO ÚNICO DE IA PARA TODA A ABA PRODUTO ─────────────────────────────
+    def _ctx_produto_completa():
+        ctx_rank = build_ai_context("produto", "Ranking por Produto",
                                     df, df_base, df_raw,
-                                    extra={"metrica_rank": "unidades"})
-        _ia_button("Evolucao Semanal por Produto — Unidades",
-                   _ctx_ev_un, "ia_btn_ev_un", analysis_type="produto")
+                                    extra={"metrica_rank": metrica_rank})
+        ctx_donut = build_ai_context("produto", "Participacao por Produto",
+                                     df, df_base, df_raw,
+                                     extra={"metrica_rank": metrica_rank})
+        ctx_ev = build_ai_context("produto", "Evolucao Semanal por Produto",
+                                   df, df_base, df_raw,
+                                   extra={"metrica_rank": metrica_rank})
+        combined = (
+            "ANALISE CONSOLIDADA DE PRODUTO — 3 GRAFICOS\n"
+            "============================================\n\n"
+            "--- GRAFICO 1: RANKING POR PRODUTO ---\n" + ctx_rank + "\n\n"
+            "--- GRAFICO 2: PARTICIPACAO POR PRODUTO (ROSCA) ---\n" + ctx_donut + "\n\n"
+            "--- GRAFICO 3: EVOLUCAO SEMANAL POR PRODUTO ---\n" + ctx_ev + "\n\n"
+            "INSTRUCAO: Analise os 3 graficos de forma integrada. "
+            "Cruze as informacoes de ranking, participacao percentual e evolucao temporal "
+            "para gerar insights mais ricos. Identifique produtos que estao crescendo ou "
+            "perdendo participacao, concentracao excessiva, e oportunidades de diversificacao."
+        )
+        return combined
+    _ia_button("Analise Completa de Produtos (Ranking + Participacao + Evolucao)",
+               _ctx_produto_completa, "ia_btn_produto_completa", analysis_type="produto")
 
 
 
@@ -3594,6 +3805,116 @@ with tab_cli:
                    _ctx_cli_un, "ia_btn_cli_un", analysis_type="cliente")
         if _handle_cli_ev(_ev3, _cli_set3):
             st.rerun()
+
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # SEÇÃO 4C — ANÁLISE INDIVIDUAL POR CLIENTE (Evolução Semanal)
+    # ═══════════════════════════════════════════════════════════════════════════════
+    sec("🔍", "Análise Individual por Cliente — Evolução Semanal")
+    st.markdown(
+        f"<div class='tip'>Para cada cliente nos dados filtrados, a IA gera uma análise individual "
+        f"contextualizando o desempenho, comportamento de compra e recomendações de ações comerciais. "
+        f"Os dados refletem os filtros ativos na interface.</div>",
+        unsafe_allow_html=True,
+    )
+
+    # Calcula estatísticas por cliente para a análise individual
+    _cli_stats_individual = (
+        df.groupby("nome_cliente")
+        .agg(
+            total_kg     =("kilos",          "sum"),
+            total_cx     =("caixas",         "sum"),
+            total_un     =("unidades",       "sum"),
+            n_semanas    =("semana_sort",     "nunique"),
+            n_produtos   =("codigo_produto", "nunique"),
+            n_depositos  =("deposito",        "nunique"),
+        )
+        .reset_index()
+    )
+    # Adiciona pedidos
+    _cli_ped = (
+        df[df["tem_pedido"]]
+        .groupby("nome_cliente")["pedido_clean"]
+        .nunique()
+        .reset_index()
+        .rename(columns={"pedido_clean": "n_pedidos"})
+    )
+    _cli_stats_individual = _cli_stats_individual.merge(_cli_ped, on="nome_cliente", how="left")
+    _cli_stats_individual["n_pedidos"] = _cli_stats_individual["n_pedidos"].fillna(0).astype(int)
+
+    # Calcula médias semanais
+    _cli_stats_individual["kg_sem"] = (
+        _cli_stats_individual["total_kg"] / _cli_stats_individual["n_semanas"]
+    ).round(1)
+    _cli_stats_individual["cx_sem"] = (
+        _cli_stats_individual["total_cx"] / _cli_stats_individual["n_semanas"]
+    ).round(1)
+
+    # Calcula tendência (slope) por cliente usando dados semanais
+    _cli_weekly_kg = (
+        df.groupby(["nome_cliente", "semana_sort"])["kilos"]
+        .sum().reset_index()
+    )
+
+    _cli_trends = {}
+    for _c_name, _c_grp in _cli_weekly_kg.groupby("nome_cliente"):
+        _c_vals = _c_grp.sort_values("semana_sort")["kilos"].values
+        if len(_c_vals) >= 2:
+            _x = np.arange(len(_c_vals))
+            _slope = float(np.polyfit(_x, _c_vals, 1)[0])
+            _cli_trends[_c_name] = round(_slope, 2)
+        else:
+            _cli_trends[_c_name] = 0.0
+
+    _cli_stats_individual["tendencia_kg_sem"] = _cli_stats_individual["nome_cliente"].map(_cli_trends).fillna(0.0)
+
+    # Média geral da base para comparação
+    _media_base_kg_sem = df["kilos"].sum() / df["semana_sort"].nunique() if df["semana_sort"].nunique() > 0 else 0
+
+    # Botão de análise individual por cliente
+    def _ctx_cli_individual():
+        cli_lines = []
+        for _, row in _cli_stats_individual.sort_values("total_kg", ascending=False).iterrows():
+            trend_desc = "estavel"
+            if row["tendencia_kg_sem"] > 10:
+                trend_desc = "crescente"
+            elif row["tendencia_kg_sem"] < -10:
+                trend_desc = "decrescente"
+
+            cli_lines.append(
+                f"  CLIENTE: {row['nome_cliente']}\n"
+                f"    - Total kg: {row['total_kg']:.1f} | Total cx: {row['total_cx']:.1f} | Total un: {row['total_un']:.0f}\n"
+                f"    - Semanas ativas: {row['n_semanas']} | Produtos distintos: {row['n_produtos']}\n"
+                f"    - Pedidos: {row['n_pedidos']} | Depositos: {row['n_depositos']}\n"
+                f"    - Media kg/sem: {row['kg_sem']:.1f} | Media cx/sem: {row['cx_sem']:.1f}\n"
+                f"    - Tendencia semanal kg: {row['tendencia_kg_sem']:.2f} kg/sem ({trend_desc})\n"
+                f"    - Comparacao com base: media cliente ({row['kg_sem']:.1f} kg/sem) vs "
+                f"media geral ({_media_base_kg_sem / _cli_stats_individual['nome_cliente'].nunique():.1f} kg/sem por cliente)\n"
+            )
+
+        ctx = (
+            "ANALISE INDIVIDUAL POR CLIENTE — EVOLUCAO SEMANAL\n"
+            "==================================================\n\n"
+            "INSTRUCAO CRITICA: Voce DEVE gerar uma analise INDIVIDUAL e SEPARADA para CADA cliente listado abaixo.\n"
+            "Para CADA cliente, crie uma secao com:\n"
+            "1. DIAGNOSTICO: Como este cliente vem se comportando (crescimento, estabilidade ou queda)\n"
+            "2. CONTEXTO: Coloque os numeros em perspectiva (comparacao com a media, regularidade, "
+            "diversificacao de produtos)\n"
+            "3. ACOES RECOMENDADAS: Medidas especificas a serem tomadas pela equipe comercial para "
+            "este cliente\n\n"
+            f"MEDIA GERAL DA BASE: {_media_base_kg_sem:.1f} kg/sem (todos os clientes somados)\n"
+            f"TOTAL DE CLIENTES: {len(_cli_stats_individual)}\n\n"
+            "DADOS POR CLIENTE:\n\n" + "\n".join(cli_lines) + "\n\n"
+            "FORMATO DE SAIDA: Use secoes claras separadas por cliente. Para cada cliente use:\n"
+            "## [Nome do Cliente]\n"
+            "**Diagnostico:** ...\n"
+            "**Desempenho:** ...\n"
+            "**Acoes Recomendadas:** ...\n"
+        )
+        return ctx
+
+    _ia_button("Análise Individual por Cliente — Desempenho e Recomendações",
+               _ctx_cli_individual, "ia_btn_cli_individual", analysis_type="cliente")
 
 
     # ═══════════════════════════════════════════════════════════════════════════════
@@ -4056,99 +4377,203 @@ with tab_cli:
         st.plotly_chart(fig, use_container_width=True)
 
 
-    # -- ANALISE 1: Media interna a cada 4 Notas por Cliente ----------------------
+    # -- ANÁLISES DE MÉDIA INTERNA (NOTAS e PEDIDOS) em Sub-abas ------------------
+    sec("📊", "Média Interna de Dias por Lote — por Cliente")
     st.markdown(
-        f"<div class='sec-header' style='margin-top:10px'>"
-        f"<span>📄</span> Media Interna de Dias por Lote de 4 Notas — por Cliente"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f"<div class='tip'>Cada ponto e a media dos 3 intervalos internos do lote "
-        f"(1a->2a nota, 2a->3a nota, 3a->4a nota). "
-        f"Passe o mouse para ver as datas e os intervalos individuais.</div>",
+        f"<div class='tip'>A média interna é calculada para cada grupo de 4 eventos (notas ou pedidos). "
+        f"Dentro de cada lote de 4, são medidos os 3 intervalos internos (1o→2o, 2o→3o, 3o→4o) e "
+        f"calculada a média em dias. Isso mostra a regularidade/ritmo de compra de cada cliente.</div>",
         unsafe_allow_html=True,
     )
 
-    notas_cli_dates = (
-        df_base.groupby(["nome_cliente","numero_nota"])["emissao"]
-        .min().reset_index()
-        .sort_values(["nome_cliente","emissao"])
-    )
+    _tab_notas_int, _tab_ped_int = st.tabs(["📄 Por Lote de 4 Notas", "🛒 Por Lote de 4 Pedidos"])
 
-    _notas_interno = {}
-    for cli, grp in notas_cli_dates.groupby("nome_cliente"):
-        dates   = list(grp["emissao"].dt.date)
-        interno = _internal_avg_every_n(dates, n=4)
-        if interno:
-            _notas_interno[cli] = interno
+    # -- Sub-aba 1: Media interna a cada 4 Notas por Cliente ----------------------
+    with _tab_notas_int:
+        notas_cli_dates = (
+            df_base.groupby(["nome_cliente","numero_nota"])["emissao"]
+            .min().reset_index()
+            .sort_values(["nome_cliente","emissao"])
+        )
 
-    if _notas_interno:
-        _render_ritmo_interno_chart(_notas_interno, "notas")
+        _notas_interno = {}
+        for cli, grp in notas_cli_dates.groupby("nome_cliente"):
+            dates   = list(grp["emissao"].dt.date)
+            interno = _internal_avg_every_n(dates, n=4)
+            if interno:
+                _notas_interno[cli] = interno
 
-        with st.expander("Tabela: media interna por lote (notas)"):
-            _rows_int = []
-            for cli, lotes in sorted(_notas_interno.items()):
-                for l in lotes:
-                    _rows_int.append({
-                        "Cliente":                  cli,
-                        "Lote #":                   l["lote"],
-                        "1a nota do lote":          l["data_inicio"].strftime("%d/%m/%Y"),
-                        "4a nota do lote":          l["data_fim"].strftime("%d/%m/%Y"),
-                        "Intervalos internos (dias)": "  |  ".join(str(d) for d in l["intervalos_internos"]),
-                        "Media interna (dias)":     l["media_interna"],
-                    })
-            st.dataframe(pd.DataFrame(_rows_int), height=300, hide_index=True, use_container_width=True)
-    else:
-        st.info("Nenhum cliente possui 4 ou mais notas no periodo para analise de media interna por lote.")
+        if _notas_interno:
+            _render_ritmo_interno_chart(_notas_interno, "notas")
 
+            with st.expander("Tabela: media interna por lote (notas)"):
+                _rows_int = []
+                for cli, lotes in sorted(_notas_interno.items()):
+                    for l in lotes:
+                        _rows_int.append({
+                            "Cliente":                  cli,
+                            "Lote #":                   l["lote"],
+                            "1a nota do lote":          l["data_inicio"].strftime("%d/%m/%Y"),
+                            "4a nota do lote":          l["data_fim"].strftime("%d/%m/%Y"),
+                            "Intervalos internos (dias)": "  |  ".join(str(d) for d in l["intervalos_internos"]),
+                            "Media interna (dias)":     l["media_interna"],
+                        })
+                st.dataframe(pd.DataFrame(_rows_int), height=300, hide_index=True, use_container_width=True)
 
-    # -- ANALISE 2: Media interna a cada 4 Pedidos por Cliente --------------------
-    st.markdown(
-        f"<div class='sec-header' style='margin-top:28px'>"
-        f"<span>🛒</span> Media Interna de Dias por Lote de 4 Pedidos — por Cliente"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f"<div class='tip'>Cada ponto e a media dos 3 intervalos internos do lote "
-        f"(1o->2o pedido, 2o->3o pedido, 3o->4o pedido). "
-        f"Apenas pedidos com numero identificado sao considerados.</div>",
-        unsafe_allow_html=True,
-    )
+            # Botão de IA para análise de Notas
+            def _ctx_media_interna_notas():
+                _notas_summary = []
+                for cli, lotes in sorted(_notas_interno.items()):
+                    medias = [l["media_interna"] for l in lotes]
+                    # Total de notas do cliente no período
+                    _total_notas_cli = int(notas_cli_dates[notas_cli_dates["nome_cliente"] == cli]["numero_nota"].nunique())
+                    _n_lotes = len(lotes)
+                    _notas_usadas = _n_lotes * 4
+                    _notas_restantes = _total_notas_cli - _notas_usadas
+                    # Datas de primeiro e último faturamento
+                    _datas_cli = notas_cli_dates[notas_cli_dates["nome_cliente"] == cli]["emissao"].sort_values()
+                    _primeira_nota = _datas_cli.iloc[0].strftime("%d/%m/%Y") if len(_datas_cli) > 0 else "?"
+                    _ultima_nota = _datas_cli.iloc[-1].strftime("%d/%m/%Y") if len(_datas_cli) > 0 else "?"
+                    # Dias entre primeira e última nota
+                    _span_dias = (_datas_cli.iloc[-1] - _datas_cli.iloc[0]).days if len(_datas_cli) > 1 else 0
+                    # Última nota vs hoje (inatividade)
+                    _dias_sem_nota = (pd.Timestamp.now() - _datas_cli.iloc[-1]).days if len(_datas_cli) > 0 else 0
 
-    pedidos_dates = (
-        df_base[df_base["tem_pedido"]]
-        .groupby(["nome_cliente","pedido_clean"])["emissao"]
-        .min().reset_index()
-        .sort_values(["nome_cliente","emissao"])
-    )
+                    _notas_summary.append(
+                        f"  CLIENTE: {cli}\n"
+                        f"    - Total de notas no periodo: {_total_notas_cli}\n"
+                        f"    - Lotes completos de 4: {_n_lotes} ({_notas_usadas} notas usadas, {_notas_restantes} restantes)\n"
+                        f"    - Medias internas por lote (dias): {medias}\n"
+                        f"    - Media geral dos lotes: {round(np.mean(medias), 1)} dias\n"
+                        f"    - Primeira nota: {_primeira_nota} | Ultima nota: {_ultima_nota}\n"
+                        f"    - Amplitude total: {_span_dias} dias entre primeira e ultima nota\n"
+                        f"    - Dias sem nova nota (desde ultima): {_dias_sem_nota} dias\n"
+                    )
+                ctx = (
+                    "ANALISE: Media Interna de Dias por Lote de 4 NOTAS — por Cliente\n"
+                    "================================================================\n\n"
+                    "CONCEITO: Para cada cliente, as notas fiscais sao agrupadas em lotes de 4. "
+                    "Dentro de cada lote, sao calculados os 3 intervalos internos (1a->2a nota, "
+                    "2a->3a nota, 3a->4a nota) e tirada a media em dias. "
+                    "Isso mede a REGULARIDADE de faturamento do cliente.\n\n"
+                    "ALERTA CRITICO — VOLUME vs REGULARIDADE:\n"
+                    "Uma media interna BAIXA (poucos dias entre notas) NAO significa necessariamente "
+                    "um bom cliente. E ESSENCIAL cruzar a media com:\n"
+                    "1. QUANTIDADE TOTAL de notas — poucos faturamentos (ex: apenas 4-8 notas) podem "
+                    "   gerar uma media baixa artificialmente, pois o cliente faturou rapido em um "
+                    "   periodo curto e depois PAROU.\n"
+                    "2. AMPLITUDE TEMPORAL — se o cliente tem 4 notas em 15 dias mas nenhuma nos "
+                    "   ultimos 60 dias, ele NAO e regular, apenas fez compras concentradas.\n"
+                    "3. DIAS SEM NOVA NOTA — quanto tempo faz desde a ultima nota? Se faz muitos dias, "
+                    "   o cliente pode estar inativo apesar de ter uma media interna baixa.\n"
+                    "4. NOTAS RESTANTES — se o total de notas nao completa outro lote de 4, existem "
+                    "   notas 'orfas' que nao entraram na media.\n\n"
+                    "DADOS POR CLIENTE:\n\n" + "\n".join(_notas_summary) + "\n\n"
+                    "INSTRUCAO: Para CADA cliente, analise a regularidade MAS contextualize com o volume "
+                    "total de notas e a amplitude temporal. Um cliente com media interna de 5 dias mas "
+                    "apenas 4 notas em 2 semanas e MUITO DIFERENTE de um com media de 10 dias mas 20 "
+                    "notas ao longo de 6 meses. Destaque clientes que parecem bons pela media mas "
+                    "que na verdade pararam de comprar ou tiveram poucas transacoes."
+                )
+                return ctx
+            _ia_button("Análise IA — Média Interna por Lote de 4 Notas",
+                       _ctx_media_interna_notas, "ia_btn_media_notas", analysis_type="cliente")
+        else:
+            st.info("Nenhum cliente possui 4 ou mais notas no periodo para analise de media interna por lote.")
 
-    _ped_interno = {}
-    for cli, grp in pedidos_dates.groupby("nome_cliente"):
-        dates   = list(grp["emissao"].dt.date)
-        interno = _internal_avg_every_n(dates, n=4)
-        if interno:
-            _ped_interno[cli] = interno
+    # -- Sub-aba 2: Media interna a cada 4 Pedidos por Cliente --------------------
+    with _tab_ped_int:
+        pedidos_dates = (
+            df_base[df_base["tem_pedido"]]
+            .groupby(["nome_cliente","pedido_clean"])["emissao"]
+            .min().reset_index()
+            .sort_values(["nome_cliente","emissao"])
+        )
 
-    if _ped_interno:
-        _render_ritmo_interno_chart(_ped_interno, "pedidos")
+        _ped_interno = {}
+        for cli, grp in pedidos_dates.groupby("nome_cliente"):
+            dates   = list(grp["emissao"].dt.date)
+            interno = _internal_avg_every_n(dates, n=4)
+            if interno:
+                _ped_interno[cli] = interno
 
-        with st.expander("Tabela: media interna por lote (pedidos)"):
-            _rows_int_p = []
-            for cli, lotes in sorted(_ped_interno.items()):
-                for l in lotes:
-                    _rows_int_p.append({
-                        "Cliente":                  cli,
-                        "Lote #":                   l["lote"],
-                        "1o pedido do lote":        l["data_inicio"].strftime("%d/%m/%Y"),
-                        "4o pedido do lote":        l["data_fim"].strftime("%d/%m/%Y"),
-                        "Intervalos internos (dias)": "  |  ".join(str(d) for d in l["intervalos_internos"]),
-                        "Media interna (dias)":     l["media_interna"],
-                    })
-            st.dataframe(pd.DataFrame(_rows_int_p), height=300, hide_index=True, use_container_width=True)
-    else:
-        st.info("Nenhum cliente possui 4 ou mais pedidos no periodo para analise de media interna por lote.")
+        if _ped_interno:
+            _render_ritmo_interno_chart(_ped_interno, "pedidos")
+
+            with st.expander("Tabela: media interna por lote (pedidos)"):
+                _rows_int_p = []
+                for cli, lotes in sorted(_ped_interno.items()):
+                    for l in lotes:
+                        _rows_int_p.append({
+                            "Cliente":                  cli,
+                            "Lote #":                   l["lote"],
+                            "1o pedido do lote":        l["data_inicio"].strftime("%d/%m/%Y"),
+                            "4o pedido do lote":        l["data_fim"].strftime("%d/%m/%Y"),
+                            "Intervalos internos (dias)": "  |  ".join(str(d) for d in l["intervalos_internos"]),
+                            "Media interna (dias)":     l["media_interna"],
+                        })
+                st.dataframe(pd.DataFrame(_rows_int_p), height=300, hide_index=True, use_container_width=True)
+
+            # Botão de IA para análise de Pedidos
+            def _ctx_media_interna_pedidos():
+                _ped_summary = []
+                for cli, lotes in sorted(_ped_interno.items()):
+                    medias = [l["media_interna"] for l in lotes]
+                    # Total de pedidos do cliente no período
+                    _total_ped_cli = int(pedidos_dates[pedidos_dates["nome_cliente"] == cli]["pedido_clean"].nunique())
+                    _n_lotes = len(lotes)
+                    _ped_usados = _n_lotes * 4
+                    _ped_restantes = _total_ped_cli - _ped_usados
+                    # Datas de primeiro e último pedido
+                    _datas_cli = pedidos_dates[pedidos_dates["nome_cliente"] == cli]["emissao"].sort_values()
+                    _primeiro_ped = _datas_cli.iloc[0].strftime("%d/%m/%Y") if len(_datas_cli) > 0 else "?"
+                    _ultimo_ped = _datas_cli.iloc[-1].strftime("%d/%m/%Y") if len(_datas_cli) > 0 else "?"
+                    # Dias entre primeiro e último pedido
+                    _span_dias = (_datas_cli.iloc[-1] - _datas_cli.iloc[0]).days if len(_datas_cli) > 1 else 0
+                    # Último pedido vs hoje (inatividade)
+                    _dias_sem_ped = (pd.Timestamp.now() - _datas_cli.iloc[-1]).days if len(_datas_cli) > 0 else 0
+
+                    _ped_summary.append(
+                        f"  CLIENTE: {cli}\n"
+                        f"    - Total de pedidos no periodo: {_total_ped_cli}\n"
+                        f"    - Lotes completos de 4: {_n_lotes} ({_ped_usados} pedidos usados, {_ped_restantes} restantes)\n"
+                        f"    - Medias internas por lote (dias): {medias}\n"
+                        f"    - Media geral dos lotes: {round(np.mean(medias), 1)} dias\n"
+                        f"    - Primeiro pedido: {_primeiro_ped} | Ultimo pedido: {_ultimo_ped}\n"
+                        f"    - Amplitude total: {_span_dias} dias entre primeiro e ultimo pedido\n"
+                        f"    - Dias sem novo pedido (desde ultimo): {_dias_sem_ped} dias\n"
+                    )
+                ctx = (
+                    "ANALISE: Media Interna de Dias por Lote de 4 PEDIDOS — por Cliente\n"
+                    "=================================================================\n\n"
+                    "CONCEITO: Para cada cliente, os pedidos sao agrupados em lotes de 4. "
+                    "Dentro de cada lote, sao calculados os 3 intervalos internos (1o->2o pedido, "
+                    "2o->3o pedido, 3o->4o pedido) e tirada a media em dias. "
+                    "Isso mede a REGULARIDADE de pedidos do cliente.\n\n"
+                    "ALERTA CRITICO — VOLUME vs REGULARIDADE:\n"
+                    "Uma media interna BAIXA (poucos dias entre pedidos) NAO significa necessariamente "
+                    "um bom cliente. E ESSENCIAL cruzar a media com:\n"
+                    "1. QUANTIDADE TOTAL de pedidos — poucos pedidos (ex: apenas 4-8) podem gerar "
+                    "   uma media baixa artificialmente, pois o cliente pediu rapido em um periodo "
+                    "   curto e depois PAROU.\n"
+                    "2. AMPLITUDE TEMPORAL — se o cliente tem 4 pedidos em 10 dias mas nenhum nos "
+                    "   ultimos 45 dias, ele NAO e regular, apenas fez pedidos concentrados.\n"
+                    "3. DIAS SEM NOVO PEDIDO — quanto tempo faz desde o ultimo pedido? Se faz muitos "
+                    "   dias, o cliente pode estar inativo apesar de ter uma media interna baixa.\n"
+                    "4. PEDIDOS RESTANTES — se o total de pedidos nao completa outro lote de 4, "
+                    "   existem pedidos 'orfaos' que nao entraram na media.\n\n"
+                    "DADOS POR CLIENTE:\n\n" + "\n".join(_ped_summary) + "\n\n"
+                    "INSTRUCAO: Para CADA cliente, analise a regularidade MAS contextualize com o "
+                    "volume total de pedidos e a amplitude temporal. Um cliente com media interna de "
+                    "3 dias mas apenas 4 pedidos em 2 semanas e MUITO DIFERENTE de um com media de "
+                    "8 dias mas 16 pedidos ao longo de 4 meses. Destaque clientes que parecem bons "
+                    "pela media mas que na verdade pararam de comprar ou tiveram poucas transacoes."
+                )
+                return ctx
+            _ia_button("Análise IA — Média Interna por Lote de 4 Pedidos",
+                       _ctx_media_interna_pedidos, "ia_btn_media_pedidos", analysis_type="cliente")
+        else:
+            st.info("Nenhum cliente possui 4 ou mais pedidos no periodo para analise de media interna por lote.")
 
 
 
